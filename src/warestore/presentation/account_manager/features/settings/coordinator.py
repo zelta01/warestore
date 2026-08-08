@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QFileDialog, QInputDialog, QLineEdit, QMessageBox, QWidget
 
 from warestore.application.account_manager.controller import AccountManagerController
-from warestore.infrastructure.persistence import vault_crypto
+from warestore.infrastructure.persistence import export_bundle, vault_crypto
 from warestore.presentation.account_manager.support import vault_unlock
 from warestore.presentation.account_manager.support.vault_unlock import prompt_new_password
 from warestore.presentation.account_manager.support.worker_registry import WorkerRegistry
@@ -56,6 +57,7 @@ class SettingsCoordinator:
         toggle_settings_open: Callable[[], None],
         apply_capture_exclusion: Callable[[], None],
         request_quit: Callable[[], None],
+        set_vault_lock_minutes: Callable[[int], None],
         worker_registry: WorkerRegistry,
     ) -> None:
         self._parent = parent
@@ -71,6 +73,7 @@ class SettingsCoordinator:
         self._toggle_settings = toggle_settings_open
         self._apply_capture_exclusion = apply_capture_exclusion
         self._request_quit = request_quit
+        self._set_vault_lock_minutes = set_vault_lock_minutes
         self._workers = worker_registry
         self._bulk_worker: BulkImportWorker | None = None
         self._bulk_rejected_count = 0
@@ -131,6 +134,12 @@ class SettingsCoordinator:
         self._settings["exclude_from_capture"] = checked
         self._ctrl.save_settings(self._settings)
         self._apply_capture_exclusion()
+
+    def on_vault_lock_minutes_change(self, _index: int) -> None:
+        minutes = int(self._ui.cmb_vault_lock.currentData() or 0)
+        self._settings["vault_lock_minutes"] = minutes
+        self._ctrl.save_settings(self._settings)
+        self._set_vault_lock_minutes(minutes)
 
     def on_cs2_toggle(self, checked: bool) -> None:
         self._settings["open_cs2"] = checked
@@ -330,6 +339,9 @@ class SettingsCoordinator:
         vault_unlock.set_recovery(self._settings, dek, code)
         self._settings["vault_mode"] = "password"
         self._ctrl.save_settings(self._settings)
+        self._set_vault_lock_minutes(
+            int(self._settings.get("vault_lock_minutes", 0) or 0)
+        )
         self._ui.refresh_master_state()
         vault_unlock.show_recovery_code(code, parent=self._parent)
         self._set_status("Master password set.")
@@ -384,9 +396,23 @@ class SettingsCoordinator:
                 return
             self._ctrl.rekey_vault(None)  # re-encrypt tokens back to DPAPI
             self._settings["vault_mode"] = "dpapi"
-            for k in ("vault_pw_salt", "vault_pw_wrap", "vault_rc_salt", "vault_rc_wrap"):
+            for k in (
+                "vault_pw_salt",
+                "vault_pw_wrap",
+                "vault_rc_salt",
+                "vault_rc_wrap",
+            ):
                 self._settings[k] = ""
+            for k in (
+                "vault_kdf_iterations",
+                "vault_pw_kdf_iterations",
+                "vault_rc_kdf_iterations",
+            ):
+                self._settings[k] = None
             self._ctrl.save_settings(self._settings)
+            self._set_vault_lock_minutes(
+                int(self._settings.get("vault_lock_minutes", 0) or 0)
+            )
             self._ui.refresh_master_state()
             self._set_status("Master password removed.")
 
@@ -431,7 +457,17 @@ class SettingsCoordinator:
                 )
             return
 
-        self._bulk_rejected_count = len(expired)
+        self._start_bulk_import(importable, rejected_count=len(expired))
+
+    def _start_bulk_import(
+        self, importable: list[str], *, rejected_count: int = 0
+    ) -> None:
+        """Run the shared bulk worker for pasted or decrypted bundle entries."""
+        if not importable:
+            return
+        if self._bulk_worker and self._bulk_worker.isRunning():
+            return
+        self._bulk_rejected_count = rejected_count
         self._ui.btn_import.setEnabled(False)
         self._ui.txt_bulk.setEnabled(False)
         self._set_bulk_status("")
@@ -473,11 +509,38 @@ class SettingsCoordinator:
             self._parent,
             "Open Token File",
             "",
-            "Text Files (*.txt);;All Files (*)",
+            "WareStore encrypted bundles (*.wsx);;Text Files (*.txt);;All Files (*)",
         )
         if not path:
             return
         try:
+            raw = Path(path).read_bytes()
+            if raw.startswith(export_bundle.MAGIC) or Path(path).suffix.lower() == ".wsx":
+                passphrase, ok = QInputDialog.getText(
+                    self._parent,
+                    "Open encrypted export",
+                    "Export passphrase:",
+                    QLineEdit.Password,
+                )
+                if not ok:
+                    return
+                try:
+                    entries = export_bundle.import_encrypted(raw, passphrase)
+                except Exception:
+                    QMessageBox.warning(
+                        self._parent,
+                        "Import failed",
+                        "The encrypted bundle is damaged or the passphrase is incorrect.",
+                    )
+                    return
+                importable, expired = self._ctrl.classify_bulk_tokens("\n".join(entries))
+                if not importable:
+                    self._set_bulk_status(
+                        "No importable tokens in the encrypted bundle.", warning=True
+                    )
+                    return
+                self._start_bulk_import(importable, rejected_count=len(expired))
+                return
             with open(path, encoding="utf-8", errors="replace") as f:
                 self._ui.txt_bulk.setPlainText(f.read())
             self.on_bulk_text_change()

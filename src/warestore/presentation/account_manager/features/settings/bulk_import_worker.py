@@ -31,23 +31,26 @@ class BulkImportWorker(QThread):
 
     def run(self):
         success, total = 0, len(self.tokens)
-        for i, tok in enumerate(self.tokens):
-            # A token login is one indivisible file-mutation pipeline. Honour
-            # cancellation only at the safe boundary between tokens.
-            if self.isInterruptionRequested():
-                break
-            self.progress.emit(i + 1, total)
-            self.status.emit(f"Importing {i + 1} / {total}…")
-            try:
-                self._ctrl.kill_steam()
-                if self._ctrl.perform_token_login(tok):
-                    success += 1
-            except SteamStillRunningError as exc:
-                logger.error("Bulk import stopped because Steam is still running: %s", exc)
-                self.status.emit(
-                    "Steam is still running — bulk import stopped to protect loginusers.vdf."
-                )
-                break
-            except Exception as exc:
-                logger.error(f"Bulk import token {i + 1} error: {exc}")
-        self.done.emit(success, total)
+        try:
+            for i, tok in enumerate(self.tokens):
+                # A token login is one indivisible file-mutation pipeline. Honour
+                # cancellation only at the safe boundary between tokens.
+                if self.isInterruptionRequested():
+                    break
+                self.progress.emit(i + 1, total)
+                self.status.emit(f"Importing {i + 1} / {total}…")
+                try:
+                    self._ctrl.kill_steam()
+                    if self._ctrl.perform_token_login(tok):
+                        success += 1
+                except SteamStillRunningError as exc:
+                    logger.error("Bulk import stopped because Steam is still running: %s", exc)
+                    self.status.emit(
+                        "Steam is still running — bulk import stopped to protect loginusers.vdf."
+                    )
+                    break
+                except Exception as exc:
+                    logger.error(f"Bulk import token {i + 1} error: {exc}")
+            self.done.emit(success, total)
+        finally:
+            self.tokens.clear()

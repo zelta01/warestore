@@ -7,11 +7,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PyQt5.QtWidgets import QApplication, QFileDialog, QWidget
+from pathlib import Path
+
+from PyQt5.QtWidgets import QFileDialog, QMessageBox, QWidget
 
 from warestore.application.account_manager.controller import AccountManagerController
 from warestore.application.account_manager.presenter import AccountManagerPresenter
-from warestore.infrastructure.persistence.atomic import write_text
+from warestore.infrastructure.persistence import export_bundle
+from warestore.infrastructure.persistence.atomic import write_bytes, write_text
 from warestore.presentation.account_manager.features.accounts.cs2_rank_worker import (
     Cs2RankWorker,
 )
@@ -22,6 +25,8 @@ from warestore.presentation.account_manager.support.account_targets import (
     normalize_account_targets,
 )
 from warestore.presentation.account_manager.support.worker_registry import WorkerRegistry
+from warestore.presentation.account_manager.support.secret_clipboard import copy_secret
+from warestore.presentation.account_manager.support.vault_unlock import prompt_new_password
 
 
 class AccountCoordinator:
@@ -222,20 +227,53 @@ class AccountCoordinator:
         suffix = f" ({skipped} missing token(s) skipped.)" if skipped else ""
 
         if clipboard:
-            QApplication.clipboard().setText("\n".join(lines))
-            self._info.setText(f"Copied {len(lines)} token(s) to clipboard.{suffix}")
+            copy_secret("\n".join(lines))
+            self._info.setText(
+                f"Copied {len(lines)} token(s) to clipboard for 60 seconds.{suffix}"
+            )
 
         if save_file:
-            path, _ = QFileDialog.getSaveFileName(
+            path, selected_filter = QFileDialog.getSaveFileName(
                 self._parent,
                 "Export tokens",
-                "tokens.txt",
-                "Text files (*.txt);;All files (*)",
+                "tokens.wsx",
+                "WareStore encrypted bundles (*.wsx);;Plain text (*.txt);;All files (*)",
             )
             if not path:
                 return
-            write_text(path, "\n".join(lines) + "\n")
-            self._info.setText(f"Exported {len(lines)} token(s) to {path}.{suffix}")
+            plain_text = selected_filter.startswith("Plain text") or Path(path).suffix.lower() == ".txt"
+            if plain_text:
+                warning = QMessageBox(self._parent)
+                warning.setWindowTitle("Export unencrypted tokens?")
+                warning.setIcon(QMessageBox.Warning)
+                warning.setText(
+                    "This writes every selected refresh token as readable plain text."
+                )
+                warning.setInformativeText(
+                    "Anyone or any synced service with access to the file can use "
+                    "the tokens. Delete it securely as soon as the other tool has imported it."
+                )
+                warning.setStandardButtons(QMessageBox.Cancel | QMessageBox.Yes)
+                warning.setDefaultButton(QMessageBox.Cancel)
+                if warning.exec_() != QMessageBox.Yes:
+                    return
+                write_text(path, "\n".join(lines) + "\n")
+                kind = "plain-text"
+            else:
+                if not Path(path).suffix:
+                    path += ".wsx"
+                passphrase = prompt_new_password(
+                    title="Protect encrypted export",
+                    label="Export passphrase",
+                )
+                if passphrase is None:
+                    return
+                blob = export_bundle.export_encrypted(lines, passphrase)
+                write_bytes(path, blob)
+                kind = "encrypted"
+            self._info.setText(
+                f"Exported {len(lines)} token(s) to {kind} bundle {path}.{suffix}"
+            )
 
 
     def start_status_fetch(self) -> None:

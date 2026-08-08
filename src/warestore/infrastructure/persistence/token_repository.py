@@ -6,7 +6,10 @@ import time
 from typing import Any
 
 from warestore.config.settings import ACCOUNT_MANAGER_DATA_DIR
-from warestore.infrastructure.persistence.secure_store import SecureJsonStore
+from warestore.infrastructure.persistence.secure_store import (
+    SecureJsonStore,
+    SecureStoreUnavailable,
+)
 
 
 class TokenRepository:
@@ -16,21 +19,42 @@ class TokenRepository:
         self._store = SecureJsonStore(
             path or os.path.join(ACCOUNT_MANAGER_DATA_DIR, "tokens.json"), key=key
         )
+        self._locked = False
+
+    def _require_unlocked(self) -> None:
+        if self._locked:
+            raise SecureStoreUnavailable("token vault is locked")
 
     def load_all(self) -> dict[str, dict[str, Any]]:
+        self._require_unlocked()
         return self._store.read()
 
     def load_all_strict(self) -> dict[str, dict[str, Any]]:
         """Like `load_all`, but raises `SecureStoreUnavailable` if the token file
         exists yet can't be decrypted (locked vault, bad blob). For callers that
         must not mistake "couldn't read tokens" for "no tokens"."""
+        self._require_unlocked()
         return self._store.read(strict=True)
 
     def save_all(self, tokens: dict[str, dict[str, Any]]) -> None:
+        self._require_unlocked()
         self._store.write(tokens)
+
+    def lock(self) -> None:
+        """Drop the in-memory DEK and make every read/write fail closed."""
+        self._store.set_key(None)
+        self._locked = True
+
+    def unlock(self, key: bytes) -> None:
+        """Restore a password-vault DEK after an interactive unlock."""
+        if not key:
+            raise ValueError("an unlocked password vault requires a key")
+        self._store.set_key(key)
+        self._locked = False
 
     def rekey(self, new_key: bytes | None) -> None:
         """Re-encrypt the token file from the current key to `new_key`."""
+        self._require_unlocked()
         data = self.load_all()
         self._store.set_key(new_key)
         self.save_all(data)

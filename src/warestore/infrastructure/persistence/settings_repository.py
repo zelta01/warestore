@@ -30,6 +30,10 @@ class SettingsRepository:
         "vault_pw_wrap": "",
         "vault_rc_salt": "",
         "vault_rc_wrap": "",
+        "vault_kdf_iterations": None,
+        "vault_pw_kdf_iterations": None,
+        "vault_rc_kdf_iterations": None,
+        "vault_lock_minutes": 0,
         "window_x": None,
         "window_y": None,
     }

@@ -75,6 +75,11 @@ class AccountGrid(QWidget):
         for card in self._cards:
             card.set_view_state(state_for(card.acc))
 
+    def clear_saved_tokens(self) -> None:
+        """Clear token-bearing menu state from every live account card."""
+        for card in self._cards:
+            card.clear_saved_token()
+
     def resolve_menu_targets(self, acc: dict) -> list[dict]:
         sid = acc.get("steamid", "")
         if sid and sid not in self._selected_sids:

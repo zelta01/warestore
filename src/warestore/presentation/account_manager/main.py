@@ -139,6 +139,9 @@ def main() -> None:
     vault_key = setup_or_unlock_vault(SettingsRepository())
 
     app_bundle = create_account_manager_app(vault_key=vault_key)
+    # The repository now owns the session DEK. Do not leave a second reference
+    # on main()'s stack, or idle lock could drop the store key but not this copy.
+    del vault_key
     win = MainWindow(app_bundle)
     win.show()
     sys.exit(app.exec_())

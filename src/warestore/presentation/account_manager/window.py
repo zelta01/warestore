@@ -14,6 +14,7 @@ from warestore.application.account_manager.bootstrap import (
 )
 from warestore.application.account_manager.controller import AccountManagerController
 from warestore.application.account_manager.presenter import AccountManagerPresenter
+from warestore.infrastructure.persistence.settings_repository import SettingsRepository
 from warestore.presentation.account_manager.features import (
     AccountCoordinator,
     CooldownCoordinator,
@@ -21,6 +22,8 @@ from warestore.presentation.account_manager.features import (
     SettingsCoordinator,
 )
 from warestore.presentation.account_manager.support.single_instance import InstanceServer
+from warestore.presentation.account_manager.support import vault_unlock
+from warestore.presentation.account_manager.support.vault_idle_lock import VaultIdleLock
 from warestore.presentation.account_manager.support.worker_registry import WorkerRegistry
 from warestore.presentation.account_manager.ui.chrome import RoundedPanel as _RoundedPanel
 from warestore.presentation.account_manager.ui.dialogs import FinishingWorkersDialog
@@ -165,6 +168,7 @@ class MainWindow(QMainWindow):
             toggle_settings_open=self._open_settings,
             apply_capture_exclusion=self.apply_capture_exclusion,
             request_quit=self.request_quit,
+            set_vault_lock_minutes=self._set_vault_lock_minutes,
             worker_registry=self._workers,
         )
         self._cooldowns = CooldownCoordinator(
@@ -175,6 +179,15 @@ class MainWindow(QMainWindow):
             refresh_cards=self._accounts.apply_card_metadata,
             set_status=self._ui.info_label.setText,
         )
+        self._vault_idle = VaultIdleLock(
+            self,
+            minutes=int(self._settings.get("vault_lock_minutes", 0) or 0),
+            enabled=lambda: self._settings.get("vault_mode") == "password",
+            workers=self._workers,
+            lock=self._lock_vault,
+            unlock=self._unlock_vault,
+        )
+        QApplication.instance().installEventFilter(self._vault_idle)
 
         self._filter_state: dict = {"colors": set(), "no_cooldown": False, "no_bans": False}
 
@@ -240,6 +253,9 @@ class MainWindow(QMainWindow):
         su.btn_install_spoofer.clicked.connect(self._settings_coord.on_install_spoofer)
         su.le_api_key.textChanged.connect(self._settings_coord.on_api_key_change)
         su.btn_master.clicked.connect(self._settings_coord.on_master_password)
+        su.cmb_vault_lock.currentIndexChanged.connect(
+            self._settings_coord.on_vault_lock_minutes_change
+        )
         ui._btn_log.toggled.connect(self._settings_coord.on_log_toggle)
         su.cb_close_to_tray.toggled.connect(self._settings_coord.on_close_to_tray_toggle)
         su.cb_auto_remove_expired.toggled.connect(
@@ -307,6 +323,31 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
         self._ui.set_busy(busy, message)
+
+    def _set_vault_lock_minutes(self, minutes: int) -> None:
+        if hasattr(self, "_vault_idle"):
+            self._vault_idle.set_minutes(minutes)
+
+    def _lock_vault(self) -> None:
+        """Drop the DEK plus every token-bearing presentation cache."""
+        self._controller.lock_vault()
+        self._ui.account_grid.clear_saved_tokens()
+        self._ui.entry.clear()
+        self._settings_ui.txt_bulk.clear()
+        self._ui.info_label.setText(
+            "Token vault locked after inactivity. Use WareStore to unlock it."
+        )
+
+    def _unlock_vault(self) -> bool:
+        dek = vault_unlock.prompt_unlock_vault(
+            SettingsRepository(), self._settings
+        )
+        if dek is None:
+            return False
+        self._controller.unlock_vault(dek)
+        self._accounts.apply_card_metadata()
+        self._ui.info_label.setText("Token vault unlocked.")
+        return True
 
     def _close_to_tray_enabled(self) -> bool:
         return bool(self._settings.get("close_to_tray", False) and self._tray is not None)

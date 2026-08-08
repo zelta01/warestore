@@ -261,6 +261,14 @@ class AccountManagerController:
         """Re-encrypt the saved-token file to a new key (or None for DPAPI)."""
         self._facade.tokens.rekey(new_key)
 
+    def lock_vault(self) -> None:
+        """Drop the session DEK and make token access fail closed."""
+        self._facade.tokens.lock()
+
+    def unlock_vault(self, key: bytes) -> None:
+        """Restore token access after the user unlocks an idle vault."""
+        self._facade.tokens.unlock(key)
+
     def load_tokens(self) -> dict:
         return self._facade.tokens.load_all()
 

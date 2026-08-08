@@ -79,6 +79,10 @@ class SwitchWorker(QThread):
         except Exception as exc:
             logger.exception(f"Worker error: {exc}")
             self.finished.emit(False)
+        finally:
+            # The coordinator retains the finished worker for status reporting;
+            # do not let that keep a refresh token alive for the whole session.
+            self.token = ""
 
     def _label(self) -> str:
         if self.mode == "native" and self.acc:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 from PyQt5.QtCore import (
     QByteArray,
@@ -548,6 +549,15 @@ class AccountCard(QWidget):
             self._set_cooldown(self._cs2_cooldown_expires)
         else:
             self._set_cooldown(state.cooldown_expires)
+        self._refresh_tooltip()
+        self.update()
+
+    def clear_saved_token(self) -> None:
+        """Drop the refresh token retained for this card's context menu."""
+        self._menu_state = replace(
+            self._menu_state, saved_token="", has_saved_token=False
+        )
+        self.set_jwt_expiry(JWT_NO_TOKEN)
         self._refresh_tooltip()
         self.update()
 

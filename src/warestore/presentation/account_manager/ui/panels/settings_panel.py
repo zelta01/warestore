@@ -96,6 +96,7 @@ class SettingsPanel:
         self.le_api_key = QLineEdit()
         self.lbl_api_status = QLabel("")
         self.btn_master = QPushButton()
+        self.cmb_vault_lock = QComboBox()
         self.btn_clean_userdata = QPushButton("Clean unused Steam data…")
         self.txt_bulk = BulkTokenEdit()
         self.btn_import = QPushButton("Import")
@@ -358,6 +359,29 @@ class SettingsPanel:
         self.btn_master.setFixedHeight(32)
         layout.addWidget(self.btn_master)
         self.refresh_master_state()
+
+        lock_row = QHBoxLayout()
+        lock_row.setContentsMargins(0, 2, 0, 0)
+        lock_row.addWidget(QLabel("Lock vault after inactivity"))
+        lock_row.addStretch()
+        for label, minutes in (
+            ("Never", 0),
+            ("5 minutes", 5),
+            ("15 minutes", 15),
+            ("30 minutes", 30),
+            ("1 hour", 60),
+        ):
+            self.cmb_vault_lock.addItem(label, minutes)
+        lock_minutes = int(self._settings.get("vault_lock_minutes", 0) or 0)
+        lock_idx = self.cmb_vault_lock.findData(lock_minutes)
+        self.cmb_vault_lock.setCurrentIndex(lock_idx if lock_idx >= 0 else 0)
+        self.cmb_vault_lock.setFixedWidth(116)
+        self.cmb_vault_lock.setToolTip(
+            "Drops the in-memory vault key after no keyboard or mouse activity. "
+            "The next use asks for your master password again."
+        )
+        lock_row.addWidget(self.cmb_vault_lock)
+        layout.addLayout(lock_row)
 
         self._add_separator(layout)
 

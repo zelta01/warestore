@@ -31,20 +31,23 @@ class Cs2RankWorker(QThread):
         self._ctrl = ctrl
 
     def run(self) -> None:
-        if self.isInterruptionRequested():
-            return
-        logger.info("cs2-rank: on-demand fetch started for %s", self._steam_id)
-        data = None
-        dead = False
         try:
-            data = self._ctrl.fetch_cs2_rank(self._steam_id, self._token)
-        except TokenRejectedError:
-            dead = True
-            logger.info("cs2-rank: token rejected for %s — flagged dead", self._steam_id)
-        except Exception:  # noqa: BLE001 - never crash the worker thread
-            logger.exception("cs2-rank: worker failed for %s", self._steam_id)
-        if self.isInterruptionRequested():
-            return
-        logger.info("cs2-rank: on-demand fetch done for %s (got=%s dead=%s)",
-                    self._steam_id, data is not None, dead)
-        self.done.emit(self._steam_id, data, dead)
+            if self.isInterruptionRequested():
+                return
+            logger.info("cs2-rank: on-demand fetch started for %s", self._steam_id)
+            data = None
+            dead = False
+            try:
+                data = self._ctrl.fetch_cs2_rank(self._steam_id, self._token)
+            except TokenRejectedError:
+                dead = True
+                logger.info("cs2-rank: token rejected for %s — flagged dead", self._steam_id)
+            except Exception:  # noqa: BLE001 - never crash the worker thread
+                logger.exception("cs2-rank: worker failed for %s", self._steam_id)
+            if self.isInterruptionRequested():
+                return
+            logger.info("cs2-rank: on-demand fetch done for %s (got=%s dead=%s)",
+                        self._steam_id, data is not None, dead)
+            self.done.emit(self._steam_id, data, dead)
+        finally:
+            self._token = ""

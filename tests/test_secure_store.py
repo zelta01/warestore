@@ -1,8 +1,13 @@
 import json
 import os
 
+import pytest
+
 from warestore.infrastructure.persistence import vault_crypto
-from warestore.infrastructure.persistence.secure_store import SecureJsonStore
+from warestore.infrastructure.persistence.secure_store import (
+    SecureJsonStore,
+    SecureStoreUnavailable,
+)
 from warestore.infrastructure.persistence.token_repository import TokenRepository
 
 _KEY = vault_crypto.derive_key("test-pw", b"0" * 16, 1000)
@@ -82,4 +87,18 @@ def test_repo_rekey_both_directions(tmp_path):
     assert repo.load_all()["s"]["token"] == "eyA.b.c"
     repo.rekey(None)  # -> DPAPI
     assert (tmp_path / "tok.json").read_bytes()[:4] != b"WSV1"
+    assert repo.load_all()["s"]["token"] == "eyA.b.c"
+
+
+def test_explicitly_locked_repo_raises_instead_of_looking_empty(tmp_path):
+    repo = TokenRepository(path=str(tmp_path / "tok.json"), key=_KEY)
+    repo.store("s", "u", "eyA.b.c")
+    repo.lock()
+
+    with pytest.raises(SecureStoreUnavailable, match="locked"):
+        repo.load_all()
+    with pytest.raises(SecureStoreUnavailable, match="locked"):
+        repo.save_all({})
+
+    repo.unlock(_KEY)
     assert repo.load_all()["s"]["token"] == "eyA.b.c"

@@ -8,6 +8,7 @@ from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QApplication, QMenu
 
 from warestore.application.account_manager.view_models import AccountCardMenuState
+from warestore.presentation.account_manager.support.secret_clipboard import copy_secret
 
 COLOR_CHOICES: tuple[tuple[str, str], ...] = (
     ("None", ""),
@@ -181,7 +182,7 @@ def show_account_card_menu(
     elif chosen == act_copy and token_available and not multi:
         token = menu_state.saved_token
         if token:
-            QApplication.clipboard().setText(token)
+            copy_secret(token)
     elif chosen == act_copy_export and export_count > 0:
         on_copy_export(targets)
     elif chosen == act_export_file and export_count > 0:
