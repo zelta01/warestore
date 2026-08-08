@@ -7,6 +7,7 @@ from warestore.infrastructure.persistence import (
     SettingsRepository,
     TokenRepository,
 )
+from warestore.infrastructure.persistence.file_guard import FileGuard
 from warestore.domain.accounts.services.token_parser import TokenParser
 from warestore.domain.auth.jwt_service import SteamJwtService
 from warestore.domain.steam.services.login_service import SteamLoginService
@@ -44,12 +45,14 @@ class AccountManagerFacade:
         self.api_key = SteamApiKeyGateway()
         self.cs2_config = Cs2ConfigGateway()
         self.userdata = UserdataGateway()
+        vdf_files = VdfFileGateway()
         self.steam_login = SteamLoginService(
             process=SteamProcessGateway(),
-            files=VdfFileGateway(),
+            files=vdf_files,
+            guard=FileGuard(),
             crypto=SteamCryptoGateway(),
             registry=SteamRegistryGateway(),
-            persona=PersonaGateway(),
+            persona=PersonaGateway(vdf_files),
             tokens=self.tokens,
             jwt=self.jwt,
             parser=self.parser,

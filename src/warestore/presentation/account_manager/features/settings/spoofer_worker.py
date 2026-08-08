@@ -7,6 +7,9 @@ from PyQt5.QtCore import QThread, pyqtSignal
 class SpooferInstallWorker(QThread):
     """Downloads the HWID spoofer (injector + hardware pool) off the UI thread."""
 
+    shutdown_critical = True
+    shutdown_description = "HWID spoofer installation"
+
     done = pyqtSignal(bool, str)  # success, error message
 
     def __init__(self, controller) -> None:

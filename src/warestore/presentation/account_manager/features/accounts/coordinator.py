@@ -6,12 +6,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 
 from PyQt5.QtWidgets import QApplication, QFileDialog, QWidget
 
 from warestore.application.account_manager.controller import AccountManagerController
 from warestore.application.account_manager.presenter import AccountManagerPresenter
+from warestore.infrastructure.persistence.atomic import write_text
 from warestore.presentation.account_manager.features.accounts.cs2_rank_worker import (
     Cs2RankWorker,
 )
@@ -21,6 +21,7 @@ from warestore.presentation.account_manager.features.accounts.status_worker impo
 from warestore.presentation.account_manager.support.account_targets import (
     normalize_account_targets,
 )
+from warestore.presentation.account_manager.support.worker_registry import WorkerRegistry
 
 
 class AccountCoordinator:
@@ -39,6 +40,7 @@ class AccountCoordinator:
         on_accounts_loaded: Callable[[], None],
         get_search_text: Callable[[], str],
         filter_accounts: Callable[[str], None],
+        worker_registry: WorkerRegistry,
     ) -> None:
         self._parent = parent
         self._presenter = presenter
@@ -52,6 +54,8 @@ class AccountCoordinator:
         self._on_accounts_loaded = on_accounts_loaded
         self._get_search = get_search_text
         self._filter = filter_accounts
+        self._workers = worker_registry
+        self._shutting_down = False
         self._selected: dict | None = None
         self._status_worker: StatusFetchWorker | None = None
         self._cs2_rank_worker: Cs2RankWorker | None = None
@@ -230,11 +234,13 @@ class AccountCoordinator:
             )
             if not path:
                 return
-            Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+            write_text(path, "\n".join(lines) + "\n")
             self._info.setText(f"Exported {len(lines)} token(s) to {path}.{suffix}")
 
 
     def start_status_fetch(self) -> None:
+        if self._shutting_down:
+            return
         if self._status_worker and self._status_worker.isRunning():
             return
         all_sids = self._grid.steam_ids()
@@ -245,6 +251,7 @@ class AccountCoordinator:
         self._status_worker = StatusFetchWorker(all_sids, ctrl=self._ctrl)
         self._status_worker.progress.connect(self._on_status_progress)
         self._status_worker.done.connect(self._on_status_done)
+        self._workers.track(self._status_worker)
         self._status_worker.start()
 
     def _on_status_progress(self, msg: str) -> None:
@@ -301,6 +308,8 @@ class AccountCoordinator:
         a time: the next account only starts once the previous worker finishes.
         Accounts without a saved token are skipped.
         """
+        if self._shutting_down:
+            return
         if self._cs2_rank_worker and self._cs2_rank_worker.isRunning():
             self._info.setText("A CS2 rank fetch is already running…")
             return
@@ -336,6 +345,9 @@ class AccountCoordinator:
         )
 
     def _start_next_cs2_rank(self) -> None:
+        if self._shutting_down:
+            self._cs2_rank_queue.clear()
+            return
         # Skip accounts whose token is already dead offline (expired / malformed)
         # — flag them without wasting a CM logon on a token Steam will reject.
         while self._cs2_rank_queue:
@@ -363,9 +375,13 @@ class AccountCoordinator:
             self._info.setText(f"Fetching CS2 rank for {name}…")
         self._cs2_rank_worker = Cs2RankWorker(sid, token, ctrl=self._ctrl)
         self._cs2_rank_worker.done.connect(self._on_cs2_rank_done)
+        self._workers.track(self._cs2_rank_worker)
         self._cs2_rank_worker.start()
 
     def _on_cs2_rank_done(self, steam_id: str, data, dead: bool = False) -> None:
+        if self._shutting_down:
+            self._cs2_rank_queue.clear()
+            return
         self._cs2_batch_done += 1
         if dead:
             self._flag_dead(self._cs2_current or {"steamid": steam_id}, "Logon rejected")
@@ -396,6 +412,11 @@ class AccountCoordinator:
             self._cs2_last_on_cooldown = bool(cooldown)
         # One failure never aborts the batch — carry on to the next account.
         self._start_next_cs2_rank()
+
+    def prepare_shutdown(self) -> None:
+        """Stop the sequential rank driver from creating another worker."""
+        self._shutting_down = True
+        self._cs2_rank_queue.clear()
 
     def _finish_cs2_batch(self) -> None:
         total = self._cs2_batch_total

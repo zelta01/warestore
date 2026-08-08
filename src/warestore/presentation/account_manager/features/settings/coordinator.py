@@ -15,6 +15,7 @@ from warestore.application.account_manager.controller import AccountManagerContr
 from warestore.infrastructure.persistence import vault_crypto
 from warestore.presentation.account_manager.support import vault_unlock
 from warestore.presentation.account_manager.support.vault_unlock import prompt_new_password
+from warestore.presentation.account_manager.support.worker_registry import WorkerRegistry
 from warestore.presentation.account_manager.ui.dialogs import (
     UpdateDialog,
     UserdataCleanupDialog,
@@ -54,6 +55,8 @@ class SettingsCoordinator:
         set_log_visible: Callable[[bool], None],
         toggle_settings_open: Callable[[], None],
         apply_capture_exclusion: Callable[[], None],
+        request_quit: Callable[[], None],
+        worker_registry: WorkerRegistry,
     ) -> None:
         self._parent = parent
         self._ctrl = controller
@@ -67,6 +70,8 @@ class SettingsCoordinator:
         self._set_log_visible = set_log_visible
         self._toggle_settings = toggle_settings_open
         self._apply_capture_exclusion = apply_capture_exclusion
+        self._request_quit = request_quit
+        self._workers = worker_registry
         self._bulk_worker: BulkImportWorker | None = None
         self._bulk_rejected_count = 0
         self._update_notice_shown = False
@@ -162,6 +167,7 @@ class SettingsCoordinator:
         self._set_busy(True, "Downloading HWID spoofer…")
         self._spoofer_worker = SpooferInstallWorker(self._ctrl)
         self._spoofer_worker.done.connect(self._on_spoofer_installed)
+        self._workers.track(self._spoofer_worker)
         self._spoofer_worker.start()
 
     def _on_spoofer_installed(self, success: bool, error: str) -> None:
@@ -207,6 +213,7 @@ class SettingsCoordinator:
         self._api_worker.done.connect(
             lambda result, checked=key: self._on_api_validated(checked, result)
         )
+        self._workers.track(self._api_worker)
         self._api_worker.start()
 
     def _on_api_validated(self, checked_key: str, result: str) -> None:
@@ -235,6 +242,7 @@ class SettingsCoordinator:
         self._set_busy(True, "Scanning Steam userdata…")
         self._userdata_scan = UserdataScanWorker(ctrl=self._ctrl)
         self._userdata_scan.done.connect(self._on_userdata_scanned)
+        self._workers.track(self._userdata_scan)
         self._userdata_scan.start()
 
     def _on_userdata_scanned(self, folders: list | None, error: str | None) -> None:
@@ -268,13 +276,18 @@ class SettingsCoordinator:
             return
 
         total = sum(f.size_bytes for f in selected)
+        unreadable = sum(f.unreadable_files for f in selected)
+        unreadable_note = ""
+        if unreadable:
+            noun = "file" if unreadable == 1 else "files"
+            unreadable_note = f", {unreadable} {noun} unreadable"
         confirm = QMessageBox(self._parent)
         confirm.setWindowTitle("Delete userdata folders")
         confirm.setIcon(QMessageBox.Warning)
         confirm.setText(
             f"Permanently delete {len(selected)} folder"
             f"{'s' if len(selected) != 1 else ''} "
-            f"({total / 1024 / 1024:.0f} MB)?"
+            f"({total / 1024 / 1024:.0f} MB{unreadable_note})?"
         )
         confirm.setInformativeText("This cannot be undone.")
         confirm.setStandardButtons(QMessageBox.Cancel | QMessageBox.Yes)
@@ -286,6 +299,7 @@ class SettingsCoordinator:
         self._set_busy(True, f"Deleting {len(selected)} folders…")
         self._userdata_delete = UserdataDeleteWorker(selected, ctrl=self._ctrl)
         self._userdata_delete.done.connect(self._on_userdata_deleted)
+        self._workers.track(self._userdata_delete)
         self._userdata_delete.start()
 
     def _on_userdata_deleted(self, count: int, freed: int, errors: list) -> None:
@@ -430,6 +444,7 @@ class SettingsCoordinator:
         )
         self._bulk_worker.status.connect(lambda msg: self._set_busy(True, msg))
         self._bulk_worker.done.connect(self._on_import_done)
+        self._workers.track(self._bulk_worker)
         self._bulk_worker.start()
 
     def _on_import_done(self, success: int, total: int) -> None:
@@ -482,6 +497,7 @@ class SettingsCoordinator:
                     download_sha256=info["download_sha256"],
                     download_installer=self._ctrl.download_update_installer,
                     exclude_from_capture=self._settings.get("exclude_from_capture", True),
+                    on_exit_requested=self._request_quit,
                 )
                 dialog.exec_()
                 if (

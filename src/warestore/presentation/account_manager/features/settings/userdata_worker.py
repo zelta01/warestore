@@ -41,6 +41,9 @@ class UserdataScanWorker(QThread):
 
 
 class UserdataDeleteWorker(QThread):
+    shutdown_critical = True
+    shutdown_description = "userdata deletion"
+
     done = pyqtSignal(int, int, object)  # count, bytes_freed, errors
 
     def __init__(self, folders: list, *, ctrl: AccountManagerController) -> None:

@@ -4,14 +4,17 @@
 import logging
 import os
 
-import vdf
-
 from warestore.config.settings import STEAMID64_BASE
+from warestore.domain.steam.ports import VdfFilePort
+from warestore.infrastructure.steam.vdf_file_gateway import VdfFileGateway
 
 logger = logging.getLogger(__name__)
 
 
 class PersonaGateway:
+    def __init__(self, files: VdfFilePort | None = None) -> None:
+        self._files = files or VdfFileGateway()
+
     def set_state(self, steam_dir: str, steam_id64: str, state: int = 7) -> None:
         steamid32 = int(steam_id64) - STEAMID64_BASE
         config_dir = os.path.join(steam_dir, "userdata", str(steamid32), "config")
@@ -24,11 +27,10 @@ class PersonaGateway:
         data: dict = {}
         if os.path.exists(localconfig):
             try:
-                with open(localconfig, encoding="utf-8", errors="replace") as f:
-                    data = vdf.loads(f.read())
+                data = self._files.read_vdf(localconfig)
             except Exception as exc:
-                logger.warning(f"localconfig.vdf unreadable, recreating: {exc}")
-                data = {}
+                logger.warning(f"localconfig.vdf unreadable, persona state skipped: {exc}")
+                raise
 
         store = data.setdefault("UserLocalConfigStore", {})
         friends = store.setdefault("friends", {})
@@ -36,8 +38,7 @@ class PersonaGateway:
         friends["PersonaStateDesired"] = str(state)
         store.setdefault("WebStorage", {})[prefs_key] = prefs_val
 
-        with open(localconfig, "w", encoding="utf-8") as f:
-            f.write(vdf.dumps(data, pretty=True))
+        self._files.write_vdf(localconfig, data)
 
     def set_remote_play(self, steam_dir: str, steam_id64: str, enabled: bool) -> None:
         """Toggle Steam Settings → Remote Play → "Enable Remote Play".
@@ -53,8 +54,7 @@ class PersonaGateway:
         data: dict = {}
         if os.path.exists(localconfig):
             try:
-                with open(localconfig, encoding="utf-8", errors="replace") as f:
-                    data = vdf.loads(f.read())
+                data = self._files.read_vdf(localconfig)
             except Exception as exc:
                 # Don't overwrite a config we failed to parse — leave it alone.
                 logger.warning(f"localconfig.vdf unreadable, Remote Play skipped: {exc}")
@@ -67,11 +67,11 @@ class PersonaGateway:
         ] = "1" if enabled else "0"
 
         try:
-            with open(localconfig, "w", encoding="utf-8") as f:
-                f.write(vdf.dumps(data, pretty=True))
+            self._files.write_vdf(localconfig, data)
             logger.info(f'Remote Play {"enabled" if enabled else "disabled"}.')
         except Exception as exc:
             logger.warning(f"Remote Play write failed: {exc}")
+            raise
 
     # CS2 launch options live under a deeply-nested key in localconfig.vdf:
     # UserLocalConfigStore → Software → Valve → Steam → apps → 730 →
@@ -90,8 +90,7 @@ class PersonaGateway:
         if not os.path.exists(localconfig):
             return ""
         try:
-            with open(localconfig, encoding="utf-8", errors="replace") as f:
-                node = vdf.loads(f.read()).get("UserLocalConfigStore", {})
+            node = self._files.read_vdf(localconfig).get("UserLocalConfigStore", {})
         except Exception:
             return ""
         for key in self._LAUNCH_OPTS_PATH:
@@ -104,8 +103,7 @@ class PersonaGateway:
         data: dict = {}
         if os.path.exists(localconfig):
             try:
-                with open(localconfig, encoding="utf-8", errors="replace") as f:
-                    data = vdf.loads(f.read())
+                data = self._files.read_vdf(localconfig)
             except Exception as exc:
                 logger.warning(f"localconfig.vdf unreadable, CS2 launch options skipped: {exc}")
                 return
@@ -114,8 +112,7 @@ class PersonaGateway:
             node = node.setdefault(key, {})
         node["LaunchOptions"] = options
         try:
-            with open(localconfig, "w", encoding="utf-8") as f:
-                f.write(vdf.dumps(data, pretty=True))
+            self._files.write_vdf(localconfig, data)
             logger.info(f'CS2 launch options set: "{options}"')
         except Exception as exc:
             logger.warning(f"CS2 launch options write failed: {exc}")

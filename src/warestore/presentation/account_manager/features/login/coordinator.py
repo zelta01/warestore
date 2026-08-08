@@ -14,6 +14,7 @@ from warestore.application.account_manager.presenter import AccountManagerPresen
 from warestore.presentation.account_manager.features.login.switch_worker import (
     SwitchWorker,
 )
+from warestore.presentation.account_manager.support.worker_registry import WorkerRegistry
 
 
 class LoginCoordinator:
@@ -33,6 +34,7 @@ class LoginCoordinator:
         reload_accounts: Callable[[], None],
         get_selected_account: Callable[[], dict | None],
         set_selected_account: Callable[[dict], None],
+        worker_registry: WorkerRegistry,
     ) -> None:
         self._parent = parent
         self._ctrl = controller
@@ -47,6 +49,7 @@ class LoginCoordinator:
         self._reload_accounts = reload_accounts
         self._get_selected = get_selected_account
         self._set_selected = set_selected_account
+        self._workers = worker_registry
         self._worker: SwitchWorker | None = None
 
     def is_busy(self) -> bool:
@@ -136,6 +139,7 @@ class LoginCoordinator:
         self._worker = SwitchWorker(**opts, ctrl=self._ctrl)
         self._worker.status.connect(lambda msg: self._set_busy(True, msg))
         self._worker.finished.connect(self._on_worker_done)
+        self._workers.track(self._worker)
         self._set_busy(True, f"Switching — {label}…")
         self._worker.start()
 
@@ -147,5 +151,9 @@ class LoginCoordinator:
                 self._entry.clear()
             self._set_login_enabled(False)
         else:
-            self._set_status("Switch/login failed — see log.")
+            self._set_status(
+                self._worker.error_message
+                if self._worker and self._worker.error_message
+                else "Switch/login failed — see log."
+            )
         self._refresh_log()

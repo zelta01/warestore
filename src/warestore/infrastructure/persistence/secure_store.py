@@ -23,6 +23,7 @@ from typing import Any
 import win32crypt
 
 from warestore.infrastructure.persistence import vault_crypto
+from warestore.infrastructure.persistence.atomic import write_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +122,6 @@ class SecureJsonStore:
         return data
 
     def write(self, data: dict[str, Any]) -> None:
-        os.makedirs(os.path.dirname(self._path), exist_ok=True)
         raw = json.dumps(data, indent=2).encode("utf-8")
         blob = vault_crypto.encrypt(self._key, raw) if self._key is not None else _protect(raw)
-        with open(self._path, "wb") as f:
-            f.write(blob)
+        write_bytes(self._path, blob)

@@ -1,6 +1,8 @@
+import logging
 import os
 
 from warestore.config.settings import STEAMID64_BASE
+from warestore.infrastructure.steam import userdata_gateway
 from warestore.infrastructure.steam.userdata_gateway import UserdataGateway
 
 
@@ -52,6 +54,42 @@ def test_reports_size_and_cs2_config(tmp_path):
 
     assert found[0].size_bytes >= 2048
     assert found[0].has_cs2_config is True
+
+
+def test_reports_files_whose_size_cannot_be_read(tmp_path, monkeypatch):
+    steam = str(tmp_path)
+    account = _make_account(steam, "111")
+    unreadable = os.path.join(account, "locked.bin")
+    with open(unreadable, "wb") as f:
+        f.write(b"secret")
+    real_getsize = userdata_gateway.os.path.getsize
+
+    def getsize(path):
+        if path == unreadable:
+            raise PermissionError(path)
+        return real_getsize(path)
+
+    monkeypatch.setattr(userdata_gateway.os.path, "getsize", getsize)
+
+    found = UserdataGateway().scan(steam, set(), set())
+
+    assert found[0].unreadable_files == 1
+
+
+def test_scan_permission_error_returns_empty_and_logs(tmp_path, monkeypatch, caplog):
+    steam = str(tmp_path)
+    os.makedirs(os.path.join(steam, "userdata"))
+    monkeypatch.setattr(
+        userdata_gateway.os,
+        "listdir",
+        lambda _path: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        found = UserdataGateway().scan(steam, set(), set())
+
+    assert found == []
+    assert "cannot be listed" in caplog.text
 
 
 def test_skips_shared_zero_folder_and_non_numeric(tmp_path):

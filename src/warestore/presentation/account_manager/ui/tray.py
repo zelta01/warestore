@@ -3,7 +3,7 @@
 
 import logging
 
-from PyQt5.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PyQt5.QtWidgets import QMenu, QSystemTrayIcon
 
 from warestore.presentation.account_manager.ui.theme import app_icon
 
@@ -66,7 +66,7 @@ def setup_tray(window) -> QSystemTrayIcon | None:
     act_refresh.triggered.connect(window.load_accounts)
     menu.addSeparator()
     act_quit = menu.addAction("Quit")
-    act_quit.triggered.connect(QApplication.instance().quit)
+    act_quit.triggered.connect(window.request_quit)
     tray.setContextMenu(menu)
     def _on_activated(reason):
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):

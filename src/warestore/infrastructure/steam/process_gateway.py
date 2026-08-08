@@ -7,10 +7,16 @@ import subprocess
 import sys
 import time
 
+import psutil
+
 logger = logging.getLogger(__name__)
 
 # Prevent console windows from flashing on screen when spawning child processes.
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW
+
+
+class SteamStillRunningError(RuntimeError):
+    """Steam survived every graceful and forced termination attempt."""
 
 
 class SteamProcessGateway:
@@ -22,7 +28,49 @@ class SteamProcessGateway:
         "streaming_client.exe",
     )
 
-    def kill(self) -> None:
+    @staticmethod
+    def _named_processes(names: tuple[str, ...]) -> list[psutil.Process]:
+        wanted = {name.casefold() for name in names}
+        found: list[psutil.Process] = []
+        for process in psutil.process_iter(["name"]):
+            try:
+                name = process.info.get("name") or ""
+                if name.casefold() in wanted:
+                    found.append(process)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+        return found
+
+    @classmethod
+    def _wait_until_gone(
+        cls, names: tuple[str, ...], timeout: float
+    ) -> list[psutil.Process]:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            survivors = cls._named_processes(names)
+            if not survivors or time.monotonic() >= deadline:
+                return survivors
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+
+    @classmethod
+    def _wait_until_present(cls, names: tuple[str, ...], timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            if cls._named_processes(names):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+    @staticmethod
+    def _force_kill(processes: list[psutil.Process]) -> None:
+        for process in processes:
+            try:
+                process.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+    def kill(self, *, timeout: float = 10.0) -> None:
         logger.info("Killing Steam processes...")
         for proc in self._PROCESSES:
             subprocess.run(
@@ -31,7 +79,23 @@ class SteamProcessGateway:
                 stderr=subprocess.DEVNULL,
                 creationflags=_NO_WINDOW,
             )
-        time.sleep(1.5)
+        survivors = self._wait_until_gone(self._PROCESSES, timeout)
+        if not survivors:
+            return
+
+        logger.warning(
+            "Steam processes survived taskkill; escalating to psutil.Process.kill(): %s",
+            ", ".join(sorted({proc.info.get("name") or str(proc.pid) for proc in survivors})),
+        )
+        self._force_kill(survivors)
+        survivors = self._wait_until_gone(
+            self._PROCESSES, min(2.0, max(0.0, timeout))
+        )
+        if survivors:
+            names = sorted({proc.info.get("name") or str(proc.pid) for proc in survivors})
+            raise SteamStillRunningError(
+                "Steam did not exit after forced termination: " + ", ".join(names)
+            )
 
     def install_path(self) -> str | None:
         try:
@@ -71,6 +135,12 @@ class SteamProcessGateway:
             stderr=subprocess.DEVNULL,
             creationflags=_NO_WINDOW,
         )
+        survivors = self._wait_until_gone(("injector.exe",), 3.0)
+        if survivors:
+            self._force_kill(survivors)
+            survivors = self._wait_until_gone(("injector.exe",), 1.0)
+        if survivors:
+            raise RuntimeError("A previous injector.exe process could not be stopped")
 
     def launch_with_spoofer(self, injector_path: str, *, open_cs2: bool = False) -> None:
         from warestore.infrastructure.steam.injector_stage import verify_injector
@@ -91,9 +161,10 @@ class SteamProcessGateway:
         # one — only a single wait-for-steam watcher should ever be running.
         self.kill_injectors()
         # Injector kills any lingering steam.exe then waits for the next one.
-        # Give it time to finish its own kill + enter the watch loop before
-        # Steam starts, otherwise steam.exe wins the race.
+        # Confirm the watcher process exists before Steam starts; otherwise
+        # steam.exe can win the launch race.
         logger.info(f"Launching injector (wait-for-steam mode): {injector_path}")
         subprocess.Popen([injector_path], creationflags=_NO_WINDOW)
-        time.sleep(2.0)
+        if not self._wait_until_present(("injector.exe",), 5.0):
+            raise RuntimeError("The HWID injector did not enter its watch loop")
         self.launch(open_cs2=open_cs2)

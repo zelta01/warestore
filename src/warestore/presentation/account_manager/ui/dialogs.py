@@ -2,7 +2,6 @@
 # Copyright (C) 2026 bet3rd
 
 import os
-import sys
 from urllib.parse import urlparse
 
 from PyQt5.QtCore import Qt
@@ -33,6 +32,14 @@ def _fmt_size(num_bytes: int) -> str:
     return f"{mb / 1024:.2f} GB" if mb >= 1024 else f"{mb:.0f} MB"
 
 
+def _fmt_size_with_unreadable(num_bytes: int, unreadable_files: int) -> str:
+    size = _fmt_size(num_bytes)
+    if not unreadable_files:
+        return size
+    noun = "file" if unreadable_files == 1 else "files"
+    return f"{size} ({unreadable_files} {noun} unreadable)"
+
+
 class UserdataCleanupDialog(QDialog):
     """Pick which leftover userdata folders to delete.
 
@@ -61,6 +68,11 @@ class UserdataCleanupDialog(QDialog):
 
         dead_size = sum(f.size_bytes for f in self._dead)
         managed_size = sum(f.size_bytes for f in self._managed)
+        dead_unreadable = sum(f.unreadable_files for f in self._dead)
+        managed_unreadable = sum(f.unreadable_files for f in self._managed)
+        all_size = _fmt_size_with_unreadable(
+            dead_size + managed_size, dead_unreadable + managed_unreadable
+        )
 
         intro = QLabel(
             "Leftover <b>userdata</b> folders Steam never removed. "
@@ -74,7 +86,8 @@ class UserdataCleanupDialog(QDialog):
         self._group = QButtonGroup(self)
 
         self.rb_dead = QRadioButton(
-            f"Dead only — {len(self._dead)} folders, {_fmt_size(dead_size)}"
+            f"Dead only — {len(self._dead)} folders, "
+            f"{_fmt_size_with_unreadable(dead_size, dead_unreadable)}"
         )
         self.rb_dead.setChecked(True)
         self.rb_dead.setToolTip(
@@ -91,7 +104,7 @@ class UserdataCleanupDialog(QDialog):
 
         self.rb_all = QRadioButton(
             f"Everything not in Steam — {len(self._dead) + len(self._managed)} folders, "
-            f"{_fmt_size(dead_size + managed_size)}"
+            f"{all_size}"
         )
         self._group.addButton(self.rb_all)
         layout.addWidget(self.rb_all)
@@ -158,12 +171,65 @@ class UserdataCleanupDialog(QDialog):
                 tags += " · CS2"
             if f.token_managed:
                 tags += " · has saved token"
-            self._list.addItem(f"{name} — {_fmt_size(f.size_bytes)}{tags}")
+            size = _fmt_size_with_unreadable(f.size_bytes, f.unreadable_files)
+            self._list.addItem(f"{name} — {size}{tags}")
 
     def showEvent(self, event):
         enable_dark_title_bar(int(self.winId()))
         schedule_capture_exclusion_for_widget(self, enabled=self._exclude_from_capture)
         super().showEvent(event)
+
+
+class FinishingWorkersDialog(QDialog):
+    """Non-dismissible notice shown while critical file work reaches safety."""
+
+    def __init__(
+        self,
+        parent,
+        descriptions: list[str],
+        *,
+        exclude_from_capture: bool = True,
+    ) -> None:
+        super().__init__(parent)
+        self._exclude_from_capture = exclude_from_capture
+        description = descriptions[0] if len(descriptions) == 1 else "file operations"
+
+        self.setObjectName("warestore_dialog")
+        self.setWindowTitle("Finishing safely")
+        self.setWindowFlags(
+            (self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+            & ~Qt.WindowCloseButtonHint
+        )
+        self.setFixedWidth(420)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(14)
+
+        title = QLabel(f"Finishing {description}…")
+        title.setObjectName("dialog_title")
+        layout.addWidget(title)
+
+        details = ", ".join(descriptions)
+        message = QLabel(
+            "WareStore will close as soon as this operation reaches a safe stopping "
+            f"point. Please keep the app open.\n\nRunning: {details}"
+        )
+        message.setObjectName("info")
+        message.setWordWrap(True)
+        layout.addWidget(message)
+
+        self.adjustSize()
+        self.setFixedSize(self.size())
+        self.setWindowModality(Qt.ApplicationModal)
+
+    def showEvent(self, event):
+        enable_dark_title_bar(int(self.winId()))
+        schedule_capture_exclusion_for_widget(self, enabled=self._exclude_from_capture)
+        super().showEvent(event)
+
+    def closeEvent(self, event):
+        event.ignore()
 
 
 class UpdateDialog(QDialog):
@@ -177,6 +243,7 @@ class UpdateDialog(QDialog):
         change_log: str = "",
         download_sha256: str,
         download_installer,
+        on_exit_requested,
         exclude_from_capture: bool = True,
     ):
         super().__init__(parent)
@@ -185,6 +252,8 @@ class UpdateDialog(QDialog):
         self._download_installer = download_installer
         self.force_update = force_update
         self._exclude_from_capture = exclude_from_capture
+        self._on_exit_requested = on_exit_requested
+        self._exit_started = False
 
         self.setObjectName("warestore_dialog")
         self.setWindowTitle("Update Available")
@@ -289,12 +358,23 @@ class UpdateDialog(QDialog):
             QMessageBox.critical(self, "Update failed", str(exc))
             return
         if self.force_update:
-            sys.exit(0)
+            self._request_safe_exit()
+            return
         self.accept()
+
+    def _request_safe_exit(self) -> None:
+        if self._exit_started:
+            return
+        self._exit_started = True
+        self.hide()
+        self.reject()
+        self._on_exit_requested()
 
     def closeEvent(self, event):
         if self.force_update:
-            sys.exit(0)
+            event.ignore()
+            self._request_safe_exit()
+            return
         super().closeEvent(event)
 
 

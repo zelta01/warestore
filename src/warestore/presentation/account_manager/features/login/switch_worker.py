@@ -6,13 +6,26 @@ import logging
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from warestore.application.account_manager.controller import AccountManagerController
+from warestore.infrastructure.steam.process_gateway import SteamStillRunningError
 
 logger = logging.getLogger(__name__)
 
 
 class SwitchWorker(QThread):
+    shutdown_critical = True
+    shutdown_description = "account switch"
+
     finished = pyqtSignal(bool)
     status = pyqtSignal(str)
+
+    @property
+    def shutdown_finished(self):
+        """The base QThread completion signal, after ``run`` truly returned.
+
+        This worker's public ``finished(bool)`` result signal intentionally
+        shadows QThread.finished, so lifecycle tracking needs the base signal.
+        """
+        return super().finished
 
     def __init__(
         self,
@@ -41,12 +54,23 @@ class SwitchWorker(QThread):
         self.disable_remote_play = disable_remote_play
         self.add_account_only = add_account_only
         self.spoof_on_login = spoof_on_login
+        self.error_message = ""
 
     def run(self):
         try:
             verb = "Adding" if self.add_account_only else "Switching"
             self.status.emit(f"{verb} — {self._label()}…")
-            self._ctrl.kill_steam()
+            try:
+                self._ctrl.kill_steam()
+            except SteamStillRunningError as exc:
+                self.error_message = (
+                    "Steam is still running — account switch cancelled to protect "
+                    "loginusers.vdf."
+                )
+                logger.error("%s (%s)", self.error_message, exc)
+                self.status.emit(self.error_message)
+                self.finished.emit(False)
+                return
             steam_dir = self._ctrl.steam_install_path()
             ok = self._perform_login()
             if ok:

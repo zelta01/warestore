@@ -11,6 +11,7 @@ from warestore.domain.accounts.services.token_parser import TokenParser
 from warestore.domain.auth.jwt_service import SteamJwtService
 from warestore.domain.steam.models import LoginUser
 from warestore.domain.steam.ports import (
+    FileGuardPort,
     PersonaPort,
     SteamCryptoPort,
     SteamProcessPort,
@@ -28,6 +29,7 @@ class SteamLoginService:
         *,
         process: SteamProcessPort,
         files: VdfFilePort,
+        guard: FileGuardPort,
         crypto: SteamCryptoPort,
         registry: SteamRegistryPort,
         persona: PersonaPort,
@@ -38,6 +40,7 @@ class SteamLoginService:
     ) -> None:
         self._process = process
         self._files = files
+        self._guard = guard
         self._vdf = vdf or VdfPatcher()
         self._crypto = crypto
         self._registry = registry
@@ -58,6 +61,12 @@ class SteamLoginService:
         return [user.to_dict() for user in self.parse_loginusers(path)]
 
     def parse_loginusers(self, path: str) -> list[LoginUser]:
+        """Return every valid Steam account, newest activity first.
+
+        The former 200-account cap was removed because hiding older accounts
+        made them impossible to select or switch to; a few hundred entries do
+        not make this in-memory sort meaningfully expensive.
+        """
         if not os.path.exists(path):
             return []
         try:
@@ -75,7 +84,7 @@ class SteamLoginService:
                         )
                     )
             accounts.sort(key=lambda item: item.timestamp, reverse=True)
-            return accounts[:200]
+            return accounts
         except Exception as exc:
             logger.error(f"loginusers.vdf parse error: {exc}")
             return []
@@ -83,10 +92,10 @@ class SteamLoginService:
     def login_steam_ids(self) -> set[str]:
         """The COMPLETE set of SteamID64s in loginusers.vdf.
 
-        Unlike `parse_loginusers` this is uncapped (no 200 display limit) and
-        raises rather than swallowing errors — it backs the userdata-cleanup
-        safety check, which must fail closed. Raises FileNotFoundError if Steam
-        or loginusers.vdf is missing, or a parse error if the file is corrupt.
+        This direct read raises rather than swallowing errors — it backs the
+        userdata-cleanup safety check, which must fail closed. Raises
+        FileNotFoundError if Steam or loginusers.vdf is missing, or a parse
+        error if the file is corrupt.
         """
         steam_dir = self._process.install_path()
         if not steam_dir:
@@ -224,6 +233,12 @@ class SteamLoginService:
         return new_count
 
     def perform_token_login(self, raw_token: str, disable_remote_play: bool = False) -> bool:
+        """Configure Steam for a token login as one file transaction.
+
+        A false result means the protected Steam files have no persisted changes;
+        failures after mutation begins are rolled back before reaching the
+        existing exception handler.
+        """
         try:
             logger.info("=== Token Login Start ===")
             steam_dir = self._process.install_path()
@@ -271,60 +286,68 @@ class SteamLoginService:
                 logger.error(f"config.vdf not found: {config_path}")
                 return False
 
-            vdf_data = self._files.read_vdf(config_path)
-            (
-                vdf_data.setdefault("InstallConfigStore", {})
-                .setdefault("Software", {})
-                .setdefault("Valve", {})
-                .setdefault("Steam", {})
-                .setdefault("Accounts", {})
-            )[username] = {"SteamID": steam_id}
-            self._files.write_vdf(config_path, vdf_data)
-            logger.info("config.vdf updated.")
-
             loginusers_path = os.path.join(steam_config, "loginusers.vdf")
-            if os.path.exists(loginusers_path):
-                text = self._files.read_text(loginusers_path)
-                if text.strip() and '"users"' in text:
-                    new_text = self._vdf.patch_loginusers_text(text, steam_id, username)
-                    if new_text != text:
-                        self._files.write_text(loginusers_path, new_text)
-                else:
-                    vdf_data = self._files.read_vdf(loginusers_path)
-                    self._vdf.merge_loginuser_entry(
-                        vdf_data.setdefault("users", {}), steam_id, username
-                    )
-                    self._files.write_vdf(loginusers_path, vdf_data)
-                logger.info("loginusers.vdf updated.")
-
-            self._persona.set_state(steam_dir, steam_id, state=7)
-            if disable_remote_play:
-                self._persona.set_remote_play(steam_dir, steam_id, False)
-
+            steam_id32 = str(int(steam_id) - STEAMID64_BASE)
+            localconfig_path = os.path.join(
+                steam_dir, "userdata", steam_id32, "config", "localconfig.vdf"
+            )
             local_vdf = self._process.local_vdf_path()
-            if os.path.exists(local_vdf):
-                text = self._files.read_text(local_vdf)
-                if text.strip() and '"ConnectCache"' in text:
-                    new_text = self._vdf.patch_connect_cache(text, crc32_key, encrypted)
-                    if new_text != text:
-                        self._files.write_text(local_vdf, new_text)
-                else:
-                    vdf_data = self._files.read_vdf(local_vdf)
-                    (
-                        vdf_data.setdefault("MachineUserConfigStore", {})
-                        .setdefault("Software", {})
-                        .setdefault("Valve", {})
-                        .setdefault("Steam", {})
-                        .setdefault("ConnectCache", {})
-                    )[crc32_key] = encrypted
-                    self._files.write_vdf(local_vdf, vdf_data)
-                logger.info("local.vdf (ConnectCache) updated.")
-            else:
-                logger.warning(f"local.vdf not found: {local_vdf}")
 
-            self._tokens.store(steam_id, username, jwt_token)
-            self._registry.set_autologin_with_remember(username)
-            self._vdf.disable_user_chooser(steam_dir, self._files)
+            with self._guard.protect(
+                config_path, loginusers_path, localconfig_path, local_vdf
+            ):
+                vdf_data = self._files.read_vdf(config_path)
+                (
+                    vdf_data.setdefault("InstallConfigStore", {})
+                    .setdefault("Software", {})
+                    .setdefault("Valve", {})
+                    .setdefault("Steam", {})
+                    .setdefault("Accounts", {})
+                )[username] = {"SteamID": steam_id}
+                self._files.write_vdf(config_path, vdf_data)
+                logger.info("config.vdf updated.")
+
+                if os.path.exists(loginusers_path):
+                    text = self._files.read_text(loginusers_path)
+                    if text.strip() and '"users"' in text:
+                        new_text = self._vdf.patch_loginusers_text(text, steam_id, username)
+                        if new_text != text:
+                            self._files.write_text(loginusers_path, new_text)
+                    else:
+                        vdf_data = self._files.read_vdf(loginusers_path)
+                        self._vdf.merge_loginuser_entry(
+                            vdf_data.setdefault("users", {}), steam_id, username
+                        )
+                        self._files.write_vdf(loginusers_path, vdf_data)
+                    logger.info("loginusers.vdf updated.")
+
+                self._persona.set_state(steam_dir, steam_id, state=7)
+                if disable_remote_play:
+                    self._persona.set_remote_play(steam_dir, steam_id, False)
+
+                if os.path.exists(local_vdf):
+                    text = self._files.read_text(local_vdf)
+                    if text.strip() and '"ConnectCache"' in text:
+                        new_text = self._vdf.patch_connect_cache(text, crc32_key, encrypted)
+                        if new_text != text:
+                            self._files.write_text(local_vdf, new_text)
+                    else:
+                        vdf_data = self._files.read_vdf(local_vdf)
+                        (
+                            vdf_data.setdefault("MachineUserConfigStore", {})
+                            .setdefault("Software", {})
+                            .setdefault("Valve", {})
+                            .setdefault("Steam", {})
+                            .setdefault("ConnectCache", {})
+                        )[crc32_key] = encrypted
+                        self._files.write_vdf(local_vdf, vdf_data)
+                    logger.info("local.vdf (ConnectCache) updated.")
+                else:
+                    logger.warning(f"local.vdf not found: {local_vdf}")
+
+                self._tokens.store(steam_id, username, jwt_token)
+                self._registry.set_autologin_with_remember(username)
+                self._vdf.disable_user_chooser(steam_dir, self._files)
             logger.info("Token login pipeline complete.")
             return True
         except Exception as exc:
@@ -345,26 +368,33 @@ class SteamLoginService:
             return False
 
         try:
-            text = self._files.read_text(loginusers_path)
-            offline_val = "1" if persona_state == 0 else "0"
-            text = self._vdf.patch_user_fields(
-                text,
-                acc["steamid"],
-                {
-                    "AllowAutoLogin": "1",
-                    "RememberPassword": "1",
-                    "WantsOfflineMode": offline_val,
-                    "SkipOfflineModeWarning": offline_val,
-                },
+            steam_id = acc["steamid"]
+            steam_id32 = str(int(steam_id) - STEAMID64_BASE)
+            config_path = os.path.join(steam_dir, "config", "config.vdf")
+            localconfig_path = os.path.join(
+                steam_dir, "userdata", steam_id32, "config", "localconfig.vdf"
             )
-            text = self._vdf.set_most_recent(text, acc["steamid"])
-            self._files.write_text(loginusers_path, text)
+            with self._guard.protect(config_path, loginusers_path, localconfig_path):
+                text = self._files.read_text(loginusers_path)
+                offline_val = "1" if persona_state == 0 else "0"
+                text = self._vdf.patch_user_fields(
+                    text,
+                    steam_id,
+                    {
+                        "AllowAutoLogin": "1",
+                        "RememberPassword": "1",
+                        "WantsOfflineMode": offline_val,
+                        "SkipOfflineModeWarning": offline_val,
+                    },
+                )
+                text = self._vdf.set_most_recent(text, steam_id)
+                self._files.write_text(loginusers_path, text)
 
-            self._registry.set_autologin_with_remember(acc["account_name"])
-            self._persona.set_state(steam_dir, acc["steamid"], persona_state)
-            if disable_remote_play:
-                self._persona.set_remote_play(steam_dir, acc["steamid"], False)
-            self._vdf.disable_user_chooser(steam_dir, self._files)
+                self._registry.set_autologin_with_remember(acc["account_name"])
+                self._persona.set_state(steam_dir, steam_id, persona_state)
+                if disable_remote_play:
+                    self._persona.set_remote_play(steam_dir, steam_id, False)
+                self._vdf.disable_user_chooser(steam_dir, self._files)
             logger.info(f'Switched → {acc["account_name"]} (ePersonaState={persona_state})')
             return True
         except Exception as exc:

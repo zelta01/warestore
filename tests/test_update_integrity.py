@@ -37,7 +37,7 @@ def _manifest(**overrides):
     return manifest
 
 
-def test_update_manifest_requires_installer_digest(monkeypatch):
+def test_update_manifest_without_installer_digest_is_ignored(monkeypatch):
     manifest = _manifest()
     del manifest["download_sha256"]
     monkeypatch.setattr(
@@ -46,11 +46,13 @@ def test_update_manifest_requires_installer_digest(monkeypatch):
         lambda *args, **kwargs: ManifestResponse(manifest),
     )
 
-    with pytest.raises(KeyError, match="download_sha256"):
-        update_gateway.UpdateGateway().check()
+    info = update_gateway.UpdateGateway().check()
+
+    assert info["update_available"] is False
+    assert info["force_update"] is False
 
 
-def test_update_manifest_rejects_non_https_url(monkeypatch):
+def test_update_manifest_with_non_https_url_is_ignored(monkeypatch):
     monkeypatch.setattr(
         update_gateway.requests,
         "get",
@@ -59,8 +61,10 @@ def test_update_manifest_rejects_non_https_url(monkeypatch):
         ),
     )
 
-    with pytest.raises(ValueError, match="HTTPS"):
-        update_gateway.UpdateGateway().check()
+    info = update_gateway.UpdateGateway().check()
+
+    assert info["update_available"] is False
+    assert info["force_update"] is False
 
 
 def test_installer_is_verified_before_promotion(monkeypatch, tmp_path):

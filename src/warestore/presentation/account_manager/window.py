@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 bet3rd
 
+import logging
 import os
 
 from PyQt5.QtCore import Qt, QTimer, QEvent
@@ -20,7 +21,9 @@ from warestore.presentation.account_manager.features import (
     SettingsCoordinator,
 )
 from warestore.presentation.account_manager.support.single_instance import InstanceServer
+from warestore.presentation.account_manager.support.worker_registry import WorkerRegistry
 from warestore.presentation.account_manager.ui.chrome import RoundedPanel as _RoundedPanel
+from warestore.presentation.account_manager.ui.dialogs import FinishingWorkersDialog
 from warestore.presentation.account_manager.ui.panels import MainPanel, SettingsPanel
 from warestore.presentation.account_manager.ui.theme import (
     app_icon,
@@ -34,6 +37,8 @@ from warestore.presentation.account_manager.ui.tray import (
     restore_tray_tooltip,
     setup_tray,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -67,6 +72,12 @@ class MainWindow(QMainWindow):
         self._settings: dict = self._controller.load_settings()
         self._settings_open = False
         self._tray = None
+        self._workers = WorkerRegistry()
+        self._quit_requested = False
+        self._finishing_dialog: FinishingWorkersDialog | None = None
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.setInterval(100)
+        self._shutdown_timer.timeout.connect(self._continue_requested_quit)
 
         outer = QWidget()
         if not self._use_dwm_transparency:
@@ -122,6 +133,7 @@ class MainWindow(QMainWindow):
             ),
             get_search_text=lambda: self._ui._search.text(),
             filter_accounts=self._ui.account_grid.filter_accounts,
+            worker_registry=self._workers,
         )
         self._login = LoginCoordinator(
             self,
@@ -137,6 +149,7 @@ class MainWindow(QMainWindow):
             reload_accounts=self._accounts.load_accounts,
             get_selected_account=lambda: self._accounts.selected_account,
             set_selected_account=lambda acc: setattr(self._accounts, "selected_account", acc),
+            worker_registry=self._workers,
         )
         self._settings_coord = SettingsCoordinator(
             self,
@@ -151,6 +164,8 @@ class MainWindow(QMainWindow):
             set_log_visible=self._ui.set_log_visible,
             toggle_settings_open=self._open_settings,
             apply_capture_exclusion=self.apply_capture_exclusion,
+            request_quit=self.request_quit,
+            worker_registry=self._workers,
         )
         self._cooldowns = CooldownCoordinator(
             self,
@@ -314,8 +329,51 @@ class MainWindow(QMainWindow):
         if self._close_to_tray_enabled():
             self._hide_to_tray()
         else:
-            self._close_settings_panel()
-            QApplication.quit()
+            self.request_quit()
+
+    def request_quit(self) -> None:
+        """Route every real exit through the worker shutdown barrier."""
+        if self._quit_requested:
+            return
+        self._quit_requested = True
+        self._save_window_position()
+        self._controller.save_settings(self._settings)
+        self._close_settings_panel()
+        self._accounts.prepare_shutdown()
+
+        if self._workers.any_running(critical_only=True):
+            # Bulk import observes this only between complete token pipelines;
+            # switch/delete workers intentionally run through to completion.
+            self._workers.request_interruption()
+            self._finishing_dialog = FinishingWorkersDialog(
+                self,
+                self._workers.critical_descriptions(),
+                exclude_from_capture=self._settings.get(
+                    "exclude_from_capture", True
+                ),
+            )
+            self._finishing_dialog.show()
+            self._shutdown_timer.start()
+            return
+
+        self._finish_quit()
+
+    def _continue_requested_quit(self) -> None:
+        if self._workers.any_running(critical_only=True):
+            return
+        self._finish_quit()
+
+    def _finish_quit(self) -> None:
+        self._shutdown_timer.stop()
+        if self._finishing_dialog is not None:
+            self._finishing_dialog.accept()
+            self._finishing_dialog = None
+        if not self._workers.shutdown():
+            logger.warning(
+                "Worker shutdown timed out; still running: %s",
+                ", ".join(self._workers.running_names()) or "unknown",
+            )
+        QApplication.quit()
 
     def _restore_window_position(self) -> None:
         x, y = self._settings.get("window_x"), self._settings.get("window_y")
@@ -395,11 +453,11 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
-        if self._close_to_tray_enabled():
+        if self._close_to_tray_enabled() and not self._quit_requested:
             self._save_window_position()
             self._controller.save_settings(self._settings)
             event.ignore()
             self._hide_to_tray()
             return
-        self._on_close_requested()
-        event.accept()
+        event.ignore()
+        self.request_quit()

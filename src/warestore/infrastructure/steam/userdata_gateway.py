@@ -32,6 +32,7 @@ class UserdataFolder:
     token_managed: bool  # WareStore still holds a login token for it
     has_cs2_config: bool
     account_name: str = ""  # resolved for display; "" when unknown
+    unreadable_files: int = 0
 
 
 class UserdataGateway:
@@ -45,15 +46,18 @@ class UserdataGateway:
             return None
 
     @staticmethod
-    def _dir_size(path: str) -> int:
+    def _dir_size(path: str) -> tuple[int, int]:
         total = 0
+        unreadable = 0
         for root, _dirs, files in os.walk(path):
             for name in files:
                 try:
                     total += os.path.getsize(os.path.join(root, name))
                 except OSError:
-                    pass  # file vanished or locked mid-walk; not worth failing over
-        return total
+                    # Keep scanning, but disclose that the displayed size is a
+                    # lower bound before the user confirms an irreversible delete.
+                    unreadable += 1
+        return total, unreadable
 
     def scan(
         self,
@@ -72,25 +76,33 @@ class UserdataGateway:
         if not os.path.isdir(base):
             return []
 
+        try:
+            entries = os.listdir(base)
+        except OSError as exc:
+            logger.warning(f"Steam userdata directory cannot be listed: {exc}")
+            return []
+
         login32 = {v for v in (self._to_id32(s) for s in login_ids64) if v}
         token32 = {v for v in (self._to_id32(s) for s in token_ids64) if v}
         names = names_by_id32 or {}
 
         found: list[UserdataFolder] = []
-        for name in os.listdir(base):
+        for name in entries:
             path = os.path.join(base, name)
             # Steam uses "0" for anonymous/shared data -- never a real account.
             if not name.isdigit() or name == "0" or not os.path.isdir(path):
                 continue
             if name in login32:
                 continue
+            size_bytes, unreadable_files = self._dir_size(path)
             found.append(
                 UserdataFolder(
                     account_id32=name,
                     path=path,
-                    size_bytes=self._dir_size(path),
+                    size_bytes=size_bytes,
                     token_managed=name in token32,
                     has_cs2_config=os.path.isdir(os.path.join(path, "730")),
+                    unreadable_files=unreadable_files,
                     account_name=names.get(name, ""),
                 )
             )

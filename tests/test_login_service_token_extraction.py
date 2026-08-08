@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from warestore.domain.auth.jwt_service import SteamJwtService
 from warestore.domain.accounts.services.token_parser import TokenParser
 from warestore.domain.steam.services.login_service import SteamLoginService
+from warestore.infrastructure.persistence.file_guard import FileGuard
 
 SAMPLE_JWT = "ey.payload.sig"
 
@@ -139,6 +140,7 @@ def _make_service(files: FakeFiles, crypto: FakeCrypto, tokens: FakeTokens) -> S
     return SteamLoginService(
         process=FakeProcess(),
         files=files,
+        guard=FileGuard(),
         crypto=crypto,
         registry=FakeRegistry(),
         persona=FakePersona(),

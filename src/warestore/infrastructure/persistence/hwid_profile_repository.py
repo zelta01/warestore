@@ -5,6 +5,8 @@ import json
 import logging
 from pathlib import Path
 
+from warestore.infrastructure.persistence.atomic import write_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,8 +29,7 @@ class HwidProfileRepository:
 
     def _save(self, path: Path, data: dict) -> None:
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4)
+            write_text(str(path), json.dumps(data, indent=4))
         except Exception as exc:
             logger.error(f"profiles.json write error: {exc}")
 
