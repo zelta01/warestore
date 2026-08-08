@@ -14,6 +14,7 @@ from warestore.application.account_manager.facade import AccountManagerFacade
 from warestore.domain.accounts.activity import format_last_played as format_last_played_label
 from warestore.domain.accounts.cooldown import format_cooldown_remaining
 from warestore.domain.accounts.models import AccountRecord
+from warestore.domain.auth.jwt_service import TokenVerdict, is_expired_beyond_grace
 
 logger = logging.getLogger(__name__)
 
@@ -359,12 +360,21 @@ class AccountManagerController:
     def verify_token_expiry(self, token: str) -> int:
         return self._facade.jwt.verify_expiry(token)
 
+    def classify_token(self, token: str) -> tuple[TokenVerdict, int]:
+        return self._facade.jwt.classify(token)
+
     def purge_expired_tokens(self) -> int:
         tokens = self._facade.tokens.load_all()
         removed = 0
         for steam_id, entry in list(tokens.items()):
             token = entry.get("token", "")
-            if not token or self._facade.jwt.verify_expiry(token) >= 0:
+            if not token:
+                continue
+            verdict, expires_in = self._facade.jwt.classify(token)
+            # A short grace prevents local clock skew from purging a fleet whose
+            # JWTs are still accepted by Steam. Unrecognised/malformed tokens are
+            # never silently removed; only a confidently expired token is.
+            if not is_expired_beyond_grace(verdict, expires_in):
                 continue
             del tokens[steam_id]
             removed += 1

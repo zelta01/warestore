@@ -199,7 +199,9 @@ class MainWindow(QMainWindow):
         if self._settings.get("gcpd_check_on_launch"):
             # Defer so the grid renders first; then sweep every account's CS2
             # rank sequentially (see AccountCoordinator.fetch_all_cs2_ranks).
-            QTimer.singleShot(800, self._accounts.fetch_all_cs2_ranks)
+            QTimer.singleShot(
+                800, lambda: self._accounts.fetch_all_cs2_ranks(unattended=True)
+            )
 
         self._tray = setup_tray(self)
         self._instance_server = InstanceServer(self)

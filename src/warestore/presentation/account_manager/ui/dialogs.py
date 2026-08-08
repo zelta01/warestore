@@ -401,9 +401,9 @@ class DeadAccountsDialog(QDialog):
         layout.addWidget(title)
 
         msg = QLabel(
-            "Their saved token looks dead (expired, or rejected by Steam). Remove "
-            "them from your PC? This deletes each one from Steam's login list and "
-            "erases its saved token."
+            "Review the reason shown for each account, then deliberately select "
+            "any you want to remove. Removal deletes the Steam login entry and "
+            "permanently erases the saved token."
         )
         msg.setObjectName("info")
         msg.setWordWrap(True)
@@ -420,7 +420,7 @@ class DeadAccountsDialog(QDialog):
         for acc in dead_accounts:
             item = QListWidgetItem(f"{acc.get('name', '')}   —   {acc.get('reason', '')}")
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked)
+            item.setCheckState(Qt.Unchecked)
             item.setData(Qt.UserRole, acc)
             self._list.addItem(item)
         layout.addWidget(self._list)
@@ -428,8 +428,17 @@ class DeadAccountsDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
         btn_row.addStretch()
-        btn_row.addWidget(self._make_button("Keep them", self.reject, primary=False))
-        btn_row.addWidget(self._make_button("Remove selected", self.accept, primary=True))
+        self._keep_button = self._make_button("Keep them", self.reject, primary=False)
+        self._remove_button = self._make_button(
+            "Remove selected", self.accept, primary=True
+        )
+        self._remove_button.setEnabled(False)
+        self._keep_button.setDefault(True)
+        self._keep_button.setAutoDefault(True)
+        self._remove_button.setAutoDefault(False)
+        self._list.itemChanged.connect(self._update_remove_enabled)
+        btn_row.addWidget(self._keep_button)
+        btn_row.addWidget(self._remove_button)
         layout.addLayout(btn_row)
 
         self.adjustSize()
@@ -443,6 +452,9 @@ class DeadAccountsDialog(QDialog):
             if item.checkState() == Qt.Checked:
                 out.append(item.data(Qt.UserRole))
         return out
+
+    def _update_remove_enabled(self, *_args) -> None:
+        self._remove_button.setEnabled(bool(self.selected_accounts()))
 
     def _make_button(self, text: str, on_click, *, primary: bool) -> QPushButton:
         btn = QPushButton(text)

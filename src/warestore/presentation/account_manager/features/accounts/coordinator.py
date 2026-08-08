@@ -5,14 +5,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
-
 from pathlib import Path
 
 from PyQt5.QtWidgets import QFileDialog, QMessageBox, QWidget
 
 from warestore.application.account_manager.controller import AccountManagerController
 from warestore.application.account_manager.presenter import AccountManagerPresenter
+from warestore.domain.auth.jwt_service import is_expired_beyond_grace
 from warestore.infrastructure.persistence import export_bundle
 from warestore.infrastructure.persistence.atomic import write_bytes, write_text
 from warestore.presentation.account_manager.features.accounts.cs2_rank_worker import (
@@ -27,6 +28,8 @@ from warestore.presentation.account_manager.support.account_targets import (
 from warestore.presentation.account_manager.support.worker_registry import WorkerRegistry
 from warestore.presentation.account_manager.support.secret_clipboard import copy_secret
 from warestore.presentation.account_manager.support.vault_unlock import prompt_new_password
+
+logger = logging.getLogger(__name__)
 
 
 class AccountCoordinator:
@@ -76,7 +79,10 @@ class AccountCoordinator:
         # Accounts flagged dead during a sweep (expired offline, or logon-rejected)
         # -> prompted for removal when the batch finishes.
         self._cs2_dead: list[dict] = []
-        self._cs2_current: dict | None = None
+        self._cs2_accounts_by_id: dict[str, dict] = {}
+        self._cs2_cm_rejections = 0
+        self._cs2_unattended = False
+        self._info.linkActivated.connect(self._on_status_link)
 
     @property
     def selected_account(self) -> dict | None:
@@ -216,12 +222,12 @@ class AccountCoordinator:
         *,
         clipboard: bool,
         save_file: bool,
-    ) -> None:
+    ) -> bool:
         targets = normalize_account_targets(accounts)
         lines = self._presenter.export_entries_for(targets)
         if not lines:
             self._info.setText("No saved tokens to export.")
-            return
+            return False
 
         skipped = len(targets) - len(lines)
         suffix = f" ({skipped} missing token(s) skipped.)" if skipped else ""
@@ -240,7 +246,7 @@ class AccountCoordinator:
                 "WareStore encrypted bundles (*.wsx);;Plain text (*.txt);;All files (*)",
             )
             if not path:
-                return
+                return False
             plain_text = selected_filter.startswith("Plain text") or Path(path).suffix.lower() == ".txt"
             if plain_text:
                 warning = QMessageBox(self._parent)
@@ -256,7 +262,7 @@ class AccountCoordinator:
                 warning.setStandardButtons(QMessageBox.Cancel | QMessageBox.Yes)
                 warning.setDefaultButton(QMessageBox.Cancel)
                 if warning.exec_() != QMessageBox.Yes:
-                    return
+                    return False
                 write_text(path, "\n".join(lines) + "\n")
                 kind = "plain-text"
             else:
@@ -267,13 +273,14 @@ class AccountCoordinator:
                     label="Export passphrase",
                 )
                 if passphrase is None:
-                    return
+                    return False
                 blob = export_bundle.export_encrypted(lines, passphrase)
                 write_bytes(path, blob)
                 kind = "encrypted"
             self._info.setText(
                 f"Exported {len(lines)} token(s) to {kind} bundle {path}.{suffix}"
             )
+        return True
 
 
     def start_status_fetch(self) -> None:
@@ -293,7 +300,9 @@ class AccountCoordinator:
         self._status_worker.start()
 
     def _on_status_progress(self, msg: str) -> None:
-        if not self._is_switch_busy():
+        if not self._is_switch_busy() and not (
+            self._cs2_unattended and self._cs2_dead
+        ):
             self._info.setText(msg)
 
     def _on_status_done(self, statuses: dict) -> None:
@@ -335,11 +344,16 @@ class AccountCoordinator:
             self._grid.reapply_filters()
             self._sync_layout()
 
-    def fetch_all_cs2_ranks(self) -> None:
-        """Fetch CS2 rank for every account on the grid (sequentially)."""
-        self.fetch_cs2_ranks(self.accounts_on_grid())
+        # A late profile/status response must not erase the only affordance for
+        # reviewing an unattended sweep. Re-surface it after applying the data.
+        if self._cs2_unattended and self._cs2_dead:
+            self._show_dead_review_affordance()
 
-    def fetch_cs2_ranks(self, accounts) -> None:
+    def fetch_all_cs2_ranks(self, unattended: bool = False) -> None:
+        """Fetch CS2 rank for every account on the grid (sequentially)."""
+        self.fetch_cs2_ranks(self.accounts_on_grid(), unattended=unattended)
+
+    def fetch_cs2_ranks(self, accounts, *, unattended: bool = False) -> None:
         """Fetch CS2 rank for one or more accounts, strictly sequentially.
 
         Minting a web session touches each account, so ranks are fetched one at
@@ -369,6 +383,11 @@ class AccountCoordinator:
         self._cs2_batch_ok = 0
         self._cs2_batch_skipped = len(targets) - len(queue)
         self._cs2_dead = []
+        self._cs2_accounts_by_id = {
+            acc.get("steamid", ""): dict(acc) for acc in queue if acc.get("steamid", "")
+        }
+        self._cs2_cm_rejections = 0
+        self._cs2_unattended = unattended
         self._start_next_cs2_rank()
 
     def _flag_dead(self, acc: dict, reason: str) -> None:
@@ -386,12 +405,14 @@ class AccountCoordinator:
         if self._shutting_down:
             self._cs2_rank_queue.clear()
             return
-        # Skip accounts whose token is already dead offline (expired / malformed)
-        # — flag them without wasting a CM logon on a token Steam will reject.
+        # Only a confidently expired JWT, well outside the clock-skew grace, may
+        # bypass CM and enter review. Malformed or unfamiliar token shapes get a
+        # normal CM attempt: our parser alone is not authority to delete them.
         while self._cs2_rank_queue:
             acc = self._cs2_rank_queue[0]
             token = self._ctrl.saved_token_entry(acc.get("steamid", "")).get("token", "")
-            if self._ctrl.verify_token_expiry(token) < 0:
+            verdict, expires_in = self._ctrl.classify_token(token)
+            if is_expired_beyond_grace(verdict, expires_in):
                 self._cs2_rank_queue.pop(0)
                 self._cs2_batch_done += 1
                 self._flag_dead(acc, "Token expired")
@@ -401,7 +422,6 @@ class AccountCoordinator:
             self._finish_cs2_batch()
             return
         acc = self._cs2_rank_queue.pop(0)
-        self._cs2_current = acc
         sid = acc.get("steamid", "")
         token = self._ctrl.saved_token_entry(sid).get("token", "")
         name = acc.get("account_name", "") or sid
@@ -422,7 +442,11 @@ class AccountCoordinator:
             return
         self._cs2_batch_done += 1
         if dead:
-            self._flag_dead(self._cs2_current or {"steamid": steam_id}, "Logon rejected")
+            # The worker-emitted id is the stable attribution. Queue position or
+            # mutable "current account" state must never choose a deletion target.
+            acc = self._cs2_accounts_by_id.get(steam_id, {"steamid": steam_id})
+            self._flag_dead(acc, "Logon rejected")
+            self._cs2_cm_rejections += 1
         elif data:
             self._cs2_batch_ok += 1
             premier = data.get("premier_rating", -1)
@@ -455,6 +479,8 @@ class AccountCoordinator:
         """Stop the sequential rank driver from creating another worker."""
         self._shutting_down = True
         self._cs2_rank_queue.clear()
+        self._cs2_dead.clear()
+        self._cs2_accounts_by_id.clear()
 
     def _finish_cs2_batch(self) -> None:
         total = self._cs2_batch_total
@@ -483,9 +509,42 @@ class AccountCoordinator:
             if self._cs2_batch_skipped:
                 parts.append(f"{self._cs2_batch_skipped} skipped (no token)")
             self._info.setText("CS2 ranks: " + ", ".join(parts) + ".")
-        # Only prompt for removal after a multi-account sweep — a single
+        # A cluster of definitive-looking failures is much more likely to be a
+        # service/rate-limit event than simultaneous token revocation. Allow one
+        # isolated rejection, but suppress review when over 25% of a roster (and
+        # at least two accounts) is rejected. This keeps blast radius from scaling.
+        rejection_limit = max(1, int(total * 0.25))
+        if total > 1 and self._cs2_cm_rejections > rejection_limit:
+            logger.warning(
+                "CS2 sweep suppressed %d removal candidates after %d/%d CM rejections",
+                len(self._cs2_dead),
+                self._cs2_cm_rejections,
+                total,
+            )
+            self._cs2_dead.clear()
+            self._info.setText(
+                "Steam rejected an unusual share of the sweep. Nothing was marked "
+                "for removal — wait a while and retry."
+            )
+            return
+
+        # Only offer removal after a multi-account sweep — a single
         # right-click fetch just reports the dead token in the status bar.
         if self._cs2_dead and self._cs2_batch_total > 1:
+            if self._cs2_unattended:
+                self._show_dead_review_affordance()
+            else:
+                self._prompt_dead_accounts()
+
+    def _show_dead_review_affordance(self) -> None:
+        count = len(self._cs2_dead)
+        self._info.setText(
+            f"{count} account{'s' if count != 1 else ''} not working — "
+            '<a href="review-dead-accounts">review</a>'
+        )
+
+    def _on_status_link(self, target: str) -> None:
+        if target == "review-dead-accounts" and self._cs2_dead:
             self._prompt_dead_accounts()
 
     def _prompt_dead_accounts(self) -> None:
@@ -503,12 +562,42 @@ class AccountCoordinator:
         if not dialog.exec_():
             return
         selected = dialog.selected_accounts()
-        if selected:
+        if selected and self._offer_token_export(selected):
             self.remove_accounts(selected)
+
+    def _offer_token_export(self, accounts: list[dict]) -> bool:
+        """Offer a recoverable token backup before irreversible deletion."""
+        prompt = QMessageBox(self._parent)
+        prompt.setWindowTitle("Back up saved tokens?")
+        prompt.setIcon(QMessageBox.Warning)
+        prompt.setText(
+            "Removing these accounts permanently erases their saved tokens."
+        )
+        prompt.setInformativeText(
+            "Export an encrypted .wsx backup first? Removal continues only after "
+            "the export is saved."
+        )
+        export_btn = prompt.addButton(
+            "Export encrypted bundle…", QMessageBox.AcceptRole
+        )
+        remove_btn = prompt.addButton(
+            "Remove without export", QMessageBox.DestructiveRole
+        )
+        cancel_btn = prompt.addButton(QMessageBox.Cancel)
+        prompt.setDefaultButton(cancel_btn)
+        prompt.exec_()
+        if prompt.clickedButton() is export_btn:
+            return self._export_tokens(accounts, clipboard=False, save_file=True)
+        return prompt.clickedButton() is remove_btn
 
     def remove_accounts(self, accounts: list[dict]) -> None:
         removed = 0
         for acc in accounts:
+            logger.info(
+                "Removing reviewed dead account: %s (%s)",
+                acc.get("name", "") or acc.get("account_name", "") or "account",
+                acc.get("steamid", ""),
+            )
             if self._presenter.delete_account(acc.get("steamid", "")):
                 removed += 1
         if removed:

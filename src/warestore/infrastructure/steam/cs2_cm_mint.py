@@ -32,10 +32,12 @@ _UM_METHOD = "Authentication.GenerateAccessTokenForApp#1"
 _PROTOCOL_VERSION = 65580
 _CM_ATTEMPTS = 3
 
-# CM logon EResults that mean the refresh token itself is bad/revoked — safe to
-# treat the account as dead. Everything else (TryAnotherCM, ServiceUnavailable,
-# timeouts, "no response") is transient and must NEVER flag an account.
-_REJECTED_ERESULTS = frozenset({"InvalidPassword", "Expired", "Revoked", "AccessDenied"})
+# CM logon EResults that directly identify a bad/revoked refresh token.  In
+# particular AccessDenied is excluded: Steam also uses it around throttling and
+# a large sequential sweep must not turn rate limiting into a deletion batch.
+# Everything else (TryAnotherCM, ServiceUnavailable, timeouts, "no response")
+# is transient and must NEVER flag an account.
+_REJECTED_ERESULTS = frozenset({"InvalidPassword", "Expired", "Revoked"})
 
 
 class TokenRejectedError(Exception):

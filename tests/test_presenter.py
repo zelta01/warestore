@@ -1,3 +1,5 @@
+import pytest
+
 from warestore.application.account_manager.presenter import AccountManagerPresenter
 
 
@@ -206,3 +208,126 @@ def test_switch_worker_options_from_settings():
     )
     assert opts["open_cs2"] is True
     assert opts["cs2_options"] == "-high"
+
+
+def test_access_denied_is_not_a_definitive_cm_token_rejection():
+    from warestore.infrastructure.steam.cs2_cm_mint import _REJECTED_ERESULTS
+
+    assert "AccessDenied" not in _REJECTED_ERESULTS
+
+
+def test_dead_flag_attribution_uses_worker_emitted_steam_id():
+    pytest.importorskip("PyQt5")
+    from warestore.presentation.account_manager.features.accounts.coordinator import (
+        AccountCoordinator,
+    )
+
+    coordinator = AccountCoordinator.__new__(AccountCoordinator)
+    coordinator._shutting_down = False
+    coordinator._cs2_batch_done = 0
+    coordinator._cs2_dead = []
+    coordinator._cs2_cm_rejections = 0
+    coordinator._cs2_accounts_by_id = {
+        "emitted": {"steamid": "emitted", "account_name": "Right account"},
+        "other": {"steamid": "other", "account_name": "Wrong account"},
+    }
+    coordinator._start_next_cs2_rank = lambda: None
+
+    coordinator._on_cs2_rank_done("emitted", None, True)
+
+    assert coordinator._cs2_dead == [
+        {"steamid": "emitted", "name": "Right account", "reason": "Logon rejected"}
+    ]
+
+
+def test_one_definitive_rejection_among_transient_failures_is_offered():
+    pytest.importorskip("PyQt5")
+    from warestore.presentation.account_manager.features.accounts.coordinator import (
+        AccountCoordinator,
+    )
+
+    class _Info:
+        text = ""
+
+        def setText(self, text):
+            self.text = text
+
+    coordinator = AccountCoordinator.__new__(AccountCoordinator)
+    coordinator._cs2_batch_total = 4
+    coordinator._cs2_batch_ok = 0
+    coordinator._cs2_batch_skipped = 0
+    coordinator._cs2_last_on_cooldown = False
+    coordinator._cs2_dead = [
+        {"steamid": "one", "name": "One", "reason": "Logon rejected"}
+    ]
+    coordinator._cs2_cm_rejections = 1
+    coordinator._cs2_unattended = False
+    coordinator._info = _Info()
+    prompted = []
+    coordinator._prompt_dead_accounts = lambda: prompted.extend(coordinator._cs2_dead)
+
+    coordinator._finish_cs2_batch()
+
+    assert [account["steamid"] for account in prompted] == ["one"]
+
+
+def test_large_rejection_cluster_is_suppressed_as_probable_throttling():
+    pytest.importorskip("PyQt5")
+    from warestore.presentation.account_manager.features.accounts.coordinator import (
+        AccountCoordinator,
+    )
+
+    class _Info:
+        text = ""
+
+        def setText(self, text):
+            self.text = text
+
+    coordinator = AccountCoordinator.__new__(AccountCoordinator)
+    coordinator._cs2_batch_total = 4
+    coordinator._cs2_batch_ok = 0
+    coordinator._cs2_batch_skipped = 0
+    coordinator._cs2_last_on_cooldown = False
+    coordinator._cs2_dead = [
+        {"steamid": "one", "name": "One", "reason": "Logon rejected"},
+        {"steamid": "two", "name": "Two", "reason": "Logon rejected"},
+    ]
+    coordinator._cs2_cm_rejections = 2
+    coordinator._cs2_unattended = False
+    coordinator._info = _Info()
+    coordinator._prompt_dead_accounts = lambda: pytest.fail("must not prompt")
+
+    coordinator._finish_cs2_batch()
+
+    assert coordinator._cs2_dead == []
+    assert "Nothing was marked for removal" in coordinator._info.text
+
+
+def test_unattended_sweep_surfaces_review_link_without_opening_dialog():
+    pytest.importorskip("PyQt5")
+    from warestore.presentation.account_manager.features.accounts.coordinator import (
+        AccountCoordinator,
+    )
+
+    class _Info:
+        text = ""
+
+        def setText(self, text):
+            self.text = text
+
+    coordinator = AccountCoordinator.__new__(AccountCoordinator)
+    coordinator._cs2_batch_total = 4
+    coordinator._cs2_batch_ok = 0
+    coordinator._cs2_batch_skipped = 0
+    coordinator._cs2_last_on_cooldown = False
+    coordinator._cs2_dead = [
+        {"steamid": "one", "name": "One", "reason": "Logon rejected"}
+    ]
+    coordinator._cs2_cm_rejections = 1
+    coordinator._cs2_unattended = True
+    coordinator._info = _Info()
+    coordinator._prompt_dead_accounts = lambda: pytest.fail("must not auto-open")
+
+    coordinator._finish_cs2_batch()
+
+    assert 'href="review-dead-accounts"' in coordinator._info.text

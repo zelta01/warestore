@@ -26,18 +26,18 @@ def test_verify_steam_jwt_valid():
     assert SERVICE.verify_expiry(token) > 0
 
 
-def test_verify_steam_jwt_rejects_wrong_issuer():
+def test_verify_steam_jwt_defers_wrong_issuer_to_steam():
     token = _fake_jwt({"iss": "other", "aud": "client", "exp": 9999999999})
-    assert SERVICE.verify_expiry(token) == -1
+    assert SERVICE.verify_expiry(token) > 0
 
 
 def test_verify_expiry_rejects_malformed():
     assert SERVICE.verify_expiry("not.a.jwt") == -1
 
 
-def test_verify_steam_jwt_rejects_wrong_audience():
+def test_verify_steam_jwt_defers_wrong_audience_to_steam():
     token = _fake_jwt({"iss": "steam", "aud": "other", "exp": 9999999999})
-    assert SERVICE.verify_expiry(token) == -1
+    assert SERVICE.verify_expiry(token) > 0
 
 
 def test_jwt_expiry_label_no_token_vs_expired():
