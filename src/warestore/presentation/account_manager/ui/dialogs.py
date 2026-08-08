@@ -3,6 +3,7 @@
 
 import os
 import sys
+from urllib.parse import urlparse
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -17,6 +18,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QMessageBox,
     QVBoxLayout,
 )
 
@@ -173,10 +175,14 @@ class UpdateDialog(QDialog):
         force_update: bool,
         *,
         change_log: str = "",
+        download_sha256: str,
+        download_installer,
         exclude_from_capture: bool = True,
     ):
         super().__init__(parent)
         self.download_url = download_url
+        self.download_sha256 = download_sha256
+        self._download_installer = download_installer
         self.force_update = force_update
         self._exclude_from_capture = exclude_from_capture
 
@@ -271,7 +277,17 @@ class UpdateDialog(QDialog):
         super().showEvent(event)
 
     def _update_now(self):
-        os.system(f"start {self.download_url}")
+        if urlparse(self.download_url).scheme.lower() != "https":
+            QMessageBox.critical(self, "Update failed", "The update URL is not HTTPS.")
+            return
+        try:
+            installer = self._download_installer(
+                self.download_url, self.download_sha256
+            )
+            os.startfile(installer)
+        except Exception as exc:
+            QMessageBox.critical(self, "Update failed", str(exc))
+            return
         if self.force_update:
             sys.exit(0)
         self.accept()

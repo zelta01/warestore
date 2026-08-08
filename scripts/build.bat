@@ -13,7 +13,7 @@ uv run python -c "from warestore.presentation.account_manager.ui.theme import en
 if errorlevel 1 set "RC=1" & goto end
 
 echo [*] Syncing dev dependencies...
-uv sync --group dev
+uv sync --locked --group dev
 if errorlevel 1 set "RC=1" & goto end
 
 echo [*] Cleaning previous build artifacts...

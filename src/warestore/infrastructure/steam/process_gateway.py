@@ -4,6 +4,7 @@
 import logging
 import os
 import subprocess
+import sys
 import time
 
 logger = logging.getLogger(__name__)
@@ -56,10 +57,8 @@ class SteamProcessGateway:
             subprocess.Popen(args)
             logger.info(f'Steam launched{" → CS2 (730)" if open_cs2 else ""}.')
         else:
-            # `start` is a cmd builtin, so shell=True is required here (unlike the
-            # taskkill/injector calls, which invoke real executables directly).
             url = "steam://rungameid/730" if open_cs2 else "steam://open/main"
-            subprocess.run(["start", url], shell=True, creationflags=_NO_WINDOW)
+            os.startfile(url)
             logger.info(f'Steam launched via protocol{" (CS2)" if open_cs2 else ""}.')
 
     def kill_injectors(self) -> None:
@@ -74,6 +73,20 @@ class SteamProcessGateway:
         )
 
     def launch_with_spoofer(self, injector_path: str, *, open_cs2: bool = False) -> None:
+        from warestore.infrastructure.steam.injector_stage import verify_injector
+
+        try:
+            verify_injector(
+                injector_path,
+                require_secure_dir=getattr(sys, "frozen", False),
+            )
+        except Exception as exc:
+            logger.error(
+                "Refusing to launch untrusted injector; falling back to normal Steam: %s",
+                exc,
+            )
+            self.launch(open_cs2=open_cs2)
+            return
         # Reap any leftover injectors from previous logins before spawning a new
         # one — only a single wait-for-steam watcher should ever be running.
         self.kill_injectors()

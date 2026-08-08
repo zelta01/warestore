@@ -195,8 +195,8 @@ class AccountManagerController:
         """Return injector.exe path, or None if the spoofer isn't installed.
 
         The injector is not bundled — the user installs it on demand from
-        Settings, which downloads it into a persistent per-user dir (see
-        injector_stage). In dev it may sit at the repo root / cwd instead.
+        Settings, which downloads it into a protected ProgramData directory
+        (see injector_stage). In dev it may sit at the repo root / cwd instead.
         """
         from warestore.infrastructure.steam.injector_stage import injector_path
 
@@ -221,8 +221,10 @@ class AccountManagerController:
 
         download_injector()
         injector = self.find_injector_exe()
-        if injector:
-            self.ensure_hardware_pool(injector)
+        if not injector:
+            raise RuntimeError("verified injector was not installed")
+        if not self.ensure_hardware_pool(injector):
+            raise RuntimeError("hardware_pool.json could not be verified")
 
     def ensure_hardware_pool(self, injector_path: str) -> bool:
         """Download hardware_pool.json next to the injector if not already there."""
@@ -389,6 +391,9 @@ class AccountManagerController:
 
     def check_updates(self) -> dict:
         return self._facade.updates.check()
+
+    def download_update_installer(self, url: str, expected_sha256: str) -> str:
+        return self._facade.updates.download_installer(url, expected_sha256)
 
     # --- external ---
 

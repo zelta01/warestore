@@ -1,3 +1,5 @@
+import pytest
+
 from warestore.domain.accounts.services.token_parser import TokenParser
 
 PARSER = TokenParser()
@@ -10,6 +12,21 @@ def test_sanitize_token_strips_whitespace_and_pipe_suffix():
 
 def test_sanitize_entry_username_token_pair():
     assert PARSER.sanitize_entry(f"user----{JWT}") == f"user----{JWT}"
+
+
+@pytest.mark.parametrize("username", ["alice", "a_b-c", "[tag]user", "a" * 64])
+def test_valid_usernames_are_accepted(username: str):
+    assert TokenParser.is_valid_username(username)
+    assert PARSER.sanitize_entry(f"{username}----{JWT}") == f"{username}----{JWT}"
+
+
+@pytest.mark.parametrize(
+    "username",
+    ["", "a" * 65, 'bob"evil', 'ey"bad', "bob\nx", "bob;drop", "álîce"],
+)
+def test_invalid_usernames_are_rejected(username: str):
+    assert not TokenParser.is_valid_username(username)
+    assert PARSER.sanitize_entry(f"{username}----{JWT}") is None
 
 
 def test_sanitize_entry_rejects_garbage():
@@ -25,6 +42,12 @@ def test_parse_bulk_tokens_dedupes():
     text = f"{JWT}\n{JWT}\nuser----{JWT}\n"
     tokens = PARSER.parse_bulk(text)
     assert len(tokens) == 2
+
+
+def test_parse_bulk_skips_invalid_username_between_valid_entries():
+    text = f"alice----{JWT}\nbad\"name----{JWT}\n[tag]user----{JWT}\n"
+
+    assert PARSER.parse_bulk(text) == [f"alice----{JWT}", f"[tag]user----{JWT}"]
 
 
 def test_jwt_from_entry():

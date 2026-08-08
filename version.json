@@ -1,6 +1,7 @@
 {
     "latest_version": "3.4",
     "change_log": "**New features**\n- **CS2** \u2014 after a rank fetch (all accounts or on launch), WareStore now flags accounts whose saved login token is dead \u2014 expired, or rejected by Steam \u2014 and offers to remove them in one dialog, with a checklist so you clear exactly the ones you want.\n- **Settings** \u2014 the \"Fetch CS2 ranks on launch\" option now carries a warning: on a large roster it can hit Steam's rate limit, so you can fetch on demand from the toolbar instead.\n\n**Bug fixes**\n- **Updates** \u2014 a long changelog in the update prompt now scrolls inside the window instead of stretching it off the screen.",
-    "download_url": "https://github.com/bet3rd/warestore/releases/latest/download/WareStoreSetup.exe",
+    "download_sha256": "59cf46768851793bfdfd504d824aee8e2d6da3efe65456b0cf744b2abfc9fb13",
+    "download_url": "https://github.com/bet3rd/warestore/releases/download/v3.4/WareStoreSetup.exe",
     "force_update_below_version": "3"
 }

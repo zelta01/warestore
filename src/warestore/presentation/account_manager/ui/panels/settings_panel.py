@@ -232,8 +232,8 @@ class SettingsPanel:
         )
         self.btn_install_spoofer.setCursor(Qt.PointingHandCursor)
         self.btn_install_spoofer.setToolTip(
-            "Downloads the HWID spoofer from the spoofer repo into your\n"
-            "app-data folder. Not included in the base install."
+            "Downloads and verifies the HWID spoofer in a protected system\n"
+            "folder. Not included in the base install."
         )
         spoof_row.addWidget(self.btn_install_spoofer)
         layout.addWidget(self.spoofer_row)

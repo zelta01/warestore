@@ -10,6 +10,10 @@ from PyQt5.QtGui import QBrush, QColor, QPainter, QPainterPath, QPixmap
 from PyQt5.QtWidgets import QApplication
 
 from warestore.config.settings import ACCOUNT_MANAGER_DATA_DIR
+from warestore.infrastructure.persistence.download import (
+    download_limited,
+    remove_if_exists,
+)
 
 
 def _dpr() -> float:
@@ -31,6 +35,7 @@ except ImportError:
     PIL_AVAILABLE = False
 
 AVATAR_SIZE = 54
+_MAX_AVATAR_BYTES = 5 * 1024 * 1024
 
 # Fresh avatars fetched via the Steam Web API are cached here, keyed by Steam's
 # avatarhash, so an unchanged picture is only ever downloaded once.
@@ -154,13 +159,15 @@ def ensure_avatar_downloaded(url: str, avatar_hash: str, timeout: int = 10) -> s
     tmp = path + ".part"
     try:
         os.makedirs(_AVATAR_CACHE_DIR, exist_ok=True)
-        urllib.request.urlretrieve(url, tmp)
+        download_limited(
+            url,
+            tmp,
+            timeout=timeout,
+            max_bytes=_MAX_AVATAR_BYTES,
+            opener=urllib.request.urlopen,
+        )
         os.replace(tmp, path)
         return path
     except Exception:
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
+        remove_if_exists(tmp)
         return None

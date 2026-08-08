@@ -12,5 +12,9 @@ ACCOUNT_MANAGER_DATA_DIR = os.path.join(
     os.environ.get("APPDATA", ""),
     "SteamLoginTool_CLI",
 )
+PRIVILEGED_DATA_DIR = os.path.join(
+    os.environ.get("PROGRAMDATA", ""),
+    "WareStore",
+)
 STEAMID64_BASE = 76561197960265728
 CS2_APP_ID = "730"

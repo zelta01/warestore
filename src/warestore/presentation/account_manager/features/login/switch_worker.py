@@ -123,7 +123,13 @@ class SwitchWorker(QThread):
         injector_path = self._ctrl.find_injector_exe()
         if injector_path:
             logger.info("Spoofer enabled — launching Steam via injector.")
-            self._ctrl.ensure_hardware_pool(injector_path)
+            if not self._ctrl.ensure_hardware_pool(injector_path):
+                logger.error(
+                    "Spoofer hardware pool is missing or untrusted"
+                    " — falling back to normal Steam launch."
+                )
+                self._ctrl.launch_steam(open_cs2=open_cs2)
+                return
             self._ctrl.launch_steam_with_spoofer(injector_path, open_cs2=open_cs2)
         else:
             logger.warning(

@@ -36,14 +36,14 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0 # full history + tags, needed for the changelog
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
 
       - name: Sync dependencies
-        run: uv sync --group dev
+        run: uv sync --locked --group dev
 
       - name: Run tests
         run: uv run pytest
@@ -108,6 +108,10 @@ jobs:
           test -f dist/WareStoreSetup.exe || { echo "::error::dist/WareStoreSetup.exe was not produced"; exit 1; }
           ls -l dist/WareStoreSetup.exe
 
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: sha256sum dist/WareStoreSetup.exe > SHA256SUMS
+
       - name: Publish GitHub release
         shell: bash
         env:
@@ -119,7 +123,7 @@ jobs:
           set -eo pipefail
           FLAGS=""
           [ "$PRERELEASE" = "true" ] && FLAGS="--prerelease"
-          gh release create "$TAG" dist/WareStoreSetup.exe \
+          gh release create "$TAG" dist/WareStoreSetup.exe SHA256SUMS \
             --title "WareStore $VERSION" \
             --notes-file release_notes.txt \
             $FLAGS
@@ -130,19 +134,23 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
           FORCE_BELOW: ${{ inputs.force_update_below }}
           REPO: ${{ github.repository }}
+          TAG: ${{ steps.ver.outputs.tag }}
         run: |
           set -eo pipefail
           python - <<'PY'
           import json, os, pathlib
           version = os.environ["VERSION"]
           repo = os.environ["REPO"]
+          tag = os.environ["TAG"]
           p = pathlib.Path("version.json")
           old = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
           force = os.environ.get("FORCE_BELOW") or old.get("force_update_below_version", version)
+          digest = pathlib.Path("SHA256SUMS").read_text(encoding="utf-8").split()[0]
           manifest = {
               "latest_version": version,
               "change_log": pathlib.Path("version_changelog.txt").read_text(encoding="utf-8").strip(),
-              "download_url": f"https://github.com/{repo}/releases/latest/download/WareStoreSetup.exe",
+              "download_sha256": digest,
+              "download_url": f"https://github.com/{repo}/releases/download/{tag}/WareStoreSetup.exe",
               "force_update_below_version": force,
           }
           p.write_text(json.dumps(manifest, indent=4) + "\n", encoding="utf-8")

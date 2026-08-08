@@ -479,6 +479,8 @@ class SettingsCoordinator:
                     info["latest_version"],
                     info["force_update"],
                     change_log=info.get("change_log", ""),
+                    download_sha256=info["download_sha256"],
+                    download_installer=self._ctrl.download_update_installer,
                     exclude_from_capture=self._settings.get("exclude_from_capture", True),
                 )
                 dialog.exec_()

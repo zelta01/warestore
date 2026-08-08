@@ -245,6 +245,10 @@ class SteamLoginService:
                     self._parser.sanitize_token(p) for p in token.split(":", 1)
                 )
 
+            if username is not None and not TokenParser.is_valid_username(username):
+                logger.error("Invalid Steam account name.")
+                return False
+
             if not self._jwt.is_valid_format(jwt_token):
                 logger.error("Invalid JWT.")
                 return False

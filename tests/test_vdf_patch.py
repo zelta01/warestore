@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import vdf
 
 from warestore.domain.steam.services.vdf_patcher import VdfPatcher
 
@@ -75,6 +76,32 @@ def test_append_loginuser_block(patcher: VdfPatcher, loginusers_text: str):
     assert f'"{new_sid}"' in out
     assert '"AccountName"\t\t"charlie"' in out
     assert '"76561198000000001"' in out
+
+
+def test_append_block_escapes_quote_injection(patcher: VdfPatcher):
+    """Regression: VDF quote injection cannot forge loginusers account blocks."""
+    payload = (
+        'bob"\n\t}\n\t"76561190000000000"\n\t{\n'
+        '\t\t"AccountName"\t\t"attacker'
+    )
+    steam_id = "76561198000000099"
+
+    out = patcher.append_loginuser_block("", steam_id, payload, "1700000099")
+    users = vdf.loads(out)["users"]
+
+    assert list(users) == [steam_id]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [r"user\1name", r"user\9x", "user\\", r"user\g<0>", "plainname"],
+)
+def test_patch_field_treats_value_literally(patcher: VdfPatcher, value: str):
+    r"""Regression: replacement text must not raise `invalid group reference`."""
+    out = patcher.patch_field('"AccountName"\t\t"old"', "AccountName", value)
+    parsed = vdf.loads(f'"root"\n{{\n\t{out}\n}}')
+
+    assert parsed["root"]["AccountName"] == value
 
 
 def test_patch_connect_cache_updates_existing_key(patcher: VdfPatcher, local_vdf_text: str):

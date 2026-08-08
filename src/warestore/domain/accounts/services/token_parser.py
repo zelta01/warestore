@@ -1,7 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 bet3rd
 
+import re
+
+
 class TokenParser:
+    _VALID_USERNAME = re.compile(r"^[A-Za-z0-9_\-\[\]]{1,64}$")
+
+    @staticmethod
+    def is_valid_username(name: str) -> bool:
+        return bool(TokenParser._VALID_USERNAME.fullmatch(name))
+
     @staticmethod
     def sanitize_token(token: str) -> str:
         token = token.strip()
@@ -21,7 +30,9 @@ class TokenParser:
             )
             if not jwt_tok:
                 return None
-            username = parts[0] if not parts[0].lower().startswith("ey") else None
+            username = None if parts[0] == jwt_tok else parts[0]
+            if username is not None and not self.is_valid_username(username):
+                return None
             return f"{username}----{jwt_tok}" if username else jwt_tok
         if raw.lower().startswith("ey") and raw.count(".") == 2:
             return raw

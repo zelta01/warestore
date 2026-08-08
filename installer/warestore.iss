@@ -3,8 +3,8 @@
 ; Packages the PyInstaller onedir build (dist\WareStore\) into a single
 ; WareStoreSetup.exe that installs to Program Files, adds a Start Menu shortcut
 ; and uninstaller, and upgrades in place (closing a running instance first).
-; The app itself writes all user data to %APPDATA%\SteamLoginTool_CLI, so the
-; Program Files install dir stays read-only at runtime.
+; User data stays in %APPDATA%\SteamLoginTool_CLI. Downloaded executables and
+; privileged inputs use a protected %PROGRAMDATA%\WareStore directory.
 ;
 ; Version is passed in by the build: ISCC /DMyAppVersion=<x> (see scripts\build.bat).
 

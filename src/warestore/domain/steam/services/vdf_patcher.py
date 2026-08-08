@@ -9,6 +9,12 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+def _quote(value: str) -> str:
+    """Escape a value for a double-quoted VDF string."""
+    value = value.replace("\n", "").replace("\r", "").replace("\t", "")
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 class VdfPatcher:
     def merge_loginuser_entry(
         self,
@@ -64,11 +70,13 @@ class VdfPatcher:
     def append_loginuser_block(
         self, text: str, steamid: str, username: str, timestamp: str
     ) -> str:
+        quoted_steamid = _quote(steamid)
+        quoted_username = _quote(username)
         block = (
-            f'\n\t"{steamid}"\n'
+            f'\n\t"{quoted_steamid}"\n'
             f"\t{{\n"
-            f'\t\t"AccountName"\t\t"{username}"\n'
-            f'\t\t"PersonaName"\t\t"{username}"\n'
+            f'\t\t"AccountName"\t\t"{quoted_username}"\n'
+            f'\t\t"PersonaName"\t\t"{quoted_username}"\n'
             f'\t\t"RememberPassword"\t\t"1"\n'
             f'\t\t"WantsOfflineMode"\t\t"0"\n'
             f'\t\t"SkipOfflineModeWarning"\t\t"0"\n'
@@ -97,7 +105,12 @@ class VdfPatcher:
     def patch_connect_cache(self, text: str, crc_key: str, hex_value: str) -> str:
         key_pattern = rf'("{re.escape(crc_key)}"\s+)("[^"]*")'
         if re.search(key_pattern, text):
-            return re.sub(key_pattern, rf'\1"{hex_value}"', text, count=1)
+            return re.sub(
+                key_pattern,
+                lambda match: f'{match.group(1)}"{_quote(hex_value)}"',
+                text,
+                count=1,
+            )
         marker = '"ConnectCache"'
         idx = text.find(marker)
         if idx == -1:
@@ -105,7 +118,7 @@ class VdfPatcher:
         brace = text.find("{", idx)
         if brace == -1:
             return text
-        entry = f'\n\t\t"{crc_key}"\t\t"{hex_value}"'
+        entry = f'\n\t\t"{_quote(crc_key)}"\t\t"{_quote(hex_value)}"'
         return text[: brace + 1] + entry + text[brace + 1 :]
 
     def disable_user_chooser(self, steam_dir: str, files: "VdfFileGateway") -> None:
@@ -121,18 +134,19 @@ class VdfPatcher:
                 files.write_text(config_path, new_text)
         except Exception as exc:
             logger.warning(f"AlwaysShowUserChooser patch failed: {exc}")
+            raise
 
     def patch_field(self, text: str, field: str, value: str) -> str:
         return re.sub(
             rf'("{re.escape(field)}"(\s+))"[^"]*"',
-            rf'\1"{value}"',
+            lambda match: f'{match.group(1)}"{_quote(value)}"',
             text,
         )
 
     def _patch_field_in_block(self, block: str, field: str, value: str) -> str:
         if f'"{field}"' in block:
             return self.patch_field(block, field, value)
-        return block.rstrip() + f'\n\t\t"{field}"\t\t"{value}"\n'
+        return block.rstrip() + f'\n\t\t"{field}"\t\t"{_quote(value)}"\n'
 
     def _user_block_bounds(self, text: str, steamid: str) -> tuple[int, int] | None:
         sid_idx = text.find(f'"{steamid}"')

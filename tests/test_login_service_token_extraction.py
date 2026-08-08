@@ -52,6 +52,7 @@ class FakeFiles:
     def __init__(self, loginusers: dict, local_vdf: dict):
         self._loginusers = loginusers
         self._local_vdf = local_vdf
+        self.writes: list[tuple[str, str]] = []
 
     def read_vdf(self, path: str):
         if "loginusers" in path:
@@ -59,13 +60,13 @@ class FakeFiles:
         return self._local_vdf
 
     def write_vdf(self, path, data):
-        pass
+        self.writes.append(("vdf", path))
 
     def read_text(self, path):
         return ""
 
     def write_text(self, path, text):
-        pass
+        self.writes.append(("text", path))
 
 
 class FakeCrypto:
@@ -274,3 +275,15 @@ def test_identical_token_is_not_rewritten(monkeypatch):
     service = _make_service(files, crypto, tokens)
 
     assert service.extract_tokens_from_steam() == 0
+
+
+def test_token_login_rejects_invalid_username_without_writing():
+    files = FakeFiles(loginusers={}, local_vdf={})
+    tokens = FakeTokens()
+    service = _make_service(files, FakeCrypto(decrypt_map={}), tokens)
+
+    result = service.perform_token_login(f'bad"name----{_jwt(1000)}')
+
+    assert result is False
+    assert files.writes == []
+    assert tokens.saved == {}
