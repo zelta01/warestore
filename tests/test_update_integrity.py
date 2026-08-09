@@ -96,6 +96,35 @@ def test_installer_is_verified_before_promotion(monkeypatch, tmp_path):
     ]
 
 
+def test_installer_replaces_stale_partial(monkeypatch, tmp_path):
+    payload = b"signed installer bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(update_gateway, "PRIVILEGED_DATA_DIR", str(tmp_path))
+
+    def fake_secure(path):
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    monkeypatch.setattr(update_gateway, "ensure_admin_only_dir", fake_secure)
+    monkeypatch.setattr(update_gateway, "ensure_admin_only_file", lambda path: path)
+    monkeypatch.setattr(
+        update_gateway.urllib.request,
+        "urlopen",
+        lambda _url, timeout: DownloadResponse(payload),
+    )
+    update_dir = tmp_path / "updates"
+    update_dir.mkdir()
+    partial = update_dir / f"WareStoreSetup-{digest[:12]}.exe.part"
+    partial.write_bytes(b"interrupted")
+
+    path = update_gateway.UpdateGateway().download_installer(
+        "https://example.test/WareStoreSetup.exe", digest
+    )
+
+    assert open(path, "rb").read() == payload
+    assert not partial.exists()
+
+
 def test_installer_digest_mismatch_cleans_partial(monkeypatch, tmp_path):
     monkeypatch.setattr(update_gateway, "PRIVILEGED_DATA_DIR", str(tmp_path))
 

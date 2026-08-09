@@ -55,6 +55,26 @@ def test_ensure_avatar_downloaded_cleans_up_on_failure(tmp_path, monkeypatch):
     assert not os.path.exists(av.cached_avatar_path("z") + ".part")
 
 
+def test_ensure_avatar_downloaded_replaces_stale_partial(tmp_path, monkeypatch):
+    monkeypatch.setattr(av, "_AVATAR_CACHE_DIR", str(tmp_path / "avatars"))
+    stale = av.cached_avatar_path("stale") + ".part"
+    os.makedirs(os.path.dirname(stale), exist_ok=True)
+    with open(stale, "wb") as output:
+        output.write(b"interrupted")
+    monkeypatch.setattr(
+        av.urllib.request,
+        "urlopen",
+        lambda _url, timeout: Response(b"fresh"),
+    )
+
+    path = av.ensure_avatar_downloaded(
+        "https://avatars.steamstatic.com/stale_full.jpg", "stale"
+    )
+
+    assert path and open(path, "rb").read() == b"fresh"
+    assert not os.path.exists(stale)
+
+
 def test_avatar_cache_rejects_path_traversal_and_untrusted_urls(tmp_path, monkeypatch):
     monkeypatch.setattr(av, "_AVATAR_CACHE_DIR", str(tmp_path / "avatars"))
     assert av.ensure_avatar_downloaded(

@@ -188,6 +188,9 @@ def ensure_avatar_downloaded(url: str, avatar_hash: str, timeout: int = 10) -> s
     tmp = path + ".part"
     try:
         os.makedirs(_AVATAR_CACHE_DIR, exist_ok=True)
+        # A previous process may have stopped after creating the temporary
+        # file. Clear that stale attempt before the exclusive download create.
+        remove_if_exists(tmp)
         download_limited(
             url,
             tmp,

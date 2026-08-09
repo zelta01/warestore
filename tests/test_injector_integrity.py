@@ -55,6 +55,17 @@ def test_hash_match_promotes_verified_file(monkeypatch, tmp_path):
     assert not (tmp_path / "injector.exe.part").exists()
 
 
+def test_download_replaces_stale_partial(monkeypatch, tmp_path):
+    payload = b"verified injector"
+    (tmp_path / "injector.exe.part").write_bytes(b"interrupted")
+    _stage(monkeypatch, tmp_path, payload, hashlib.sha256(payload).hexdigest())
+
+    injector_stage.download_injector()
+
+    assert (tmp_path / "injector.exe").read_bytes() == payload
+    assert not (tmp_path / "injector.exe.part").exists()
+
+
 def test_size_cap_aborts_and_cleans_partial(monkeypatch, tmp_path):
     payload = b"0123456789"
     monkeypatch.setattr(injector_stage, "data_dir", lambda: str(tmp_path))

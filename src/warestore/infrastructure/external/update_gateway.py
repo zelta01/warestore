@@ -138,6 +138,9 @@ class UpdateGateway:
 
         partial = destination + ".part"
         try:
+            # Recover from an interrupted earlier download while retaining the
+            # exclusive-create protection inside download_limited().
+            remove_if_exists(partial)
             download_limited(
                 url,
                 partial,

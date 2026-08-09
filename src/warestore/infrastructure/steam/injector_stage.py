@@ -124,6 +124,9 @@ def download_injector() -> None:
     tmp = dest + ".part"
     logger.info("Downloading HWID spoofer from %s", INJECTOR_URL)
     try:
+        # Recover from an interrupted earlier download while retaining the
+        # exclusive-create protection inside download_limited().
+        remove_if_exists(tmp)
         download_limited(
             INJECTOR_URL,
             tmp,

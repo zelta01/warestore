@@ -124,6 +124,9 @@ def ensure(injector_path: str) -> bool:
         tmp = cache + ".part"
         logger.info("hardware_pool.json not found — downloading from remote")
         try:
+            # Recover from an interrupted earlier download while retaining the
+            # exclusive-create protection inside download_limited().
+            remove_if_exists(tmp)
             download_limited(
                 _URL,
                 tmp,

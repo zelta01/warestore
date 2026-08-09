@@ -55,6 +55,25 @@ def test_hardware_pool_is_bounded_and_validated_before_cache(monkeypatch, tmp_pa
     ]
 
 
+def test_hardware_pool_replaces_stale_partial(monkeypatch, tmp_path):
+    payload = json.dumps(_valid_pool()).encode()
+    injector = tmp_path / "injector.exe"
+    injector.write_bytes(b"injector")
+    (tmp_path / "hardware_pool.json.part").write_bytes(b"interrupted")
+    monkeypatch.setattr(
+        hardware_pool_gateway, "_persistent_dir", lambda: str(tmp_path)
+    )
+    monkeypatch.setattr(
+        hardware_pool_gateway.urllib.request,
+        "urlopen",
+        lambda _url, timeout: Response(payload),
+    )
+
+    assert hardware_pool_gateway.ensure(str(injector)) is True
+    assert json.loads((tmp_path / "hardware_pool.json").read_text()) == _valid_pool()
+    assert not (tmp_path / "hardware_pool.json.part").exists()
+
+
 def test_invalid_hardware_pool_is_not_cached(monkeypatch, tmp_path):
     injector = tmp_path / "injector.exe"
     injector.write_bytes(b"injector")
