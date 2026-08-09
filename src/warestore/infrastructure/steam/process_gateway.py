@@ -100,13 +100,40 @@ class SteamProcessGateway:
     def install_path(self) -> str | None:
         try:
             import winreg
-
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam")
-            path, _ = winreg.QueryValueEx(key, "SteamPath")
-            winreg.CloseKey(key)
-            return path.replace("/", "\\")
-        except OSError:
+        except ImportError:
             return None
+
+        locations = (
+            (winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath", 0),
+            (
+                winreg.HKEY_LOCAL_MACHINE,
+                r"Software\Valve\Steam",
+                "InstallPath",
+                getattr(winreg, "KEY_WOW64_32KEY", 0),
+            ),
+            (
+                winreg.HKEY_LOCAL_MACHINE,
+                r"Software\Valve\Steam",
+                "InstallPath",
+                getattr(winreg, "KEY_WOW64_64KEY", 0),
+            ),
+        )
+        fallback: str | None = None
+        for root, subkey, value_name, registry_view in locations:
+            try:
+                access = getattr(winreg, "KEY_READ", 0) | registry_view
+                with winreg.OpenKey(root, subkey, 0, access) as key:
+                    value, _ = winreg.QueryValueEx(key, value_name)
+            except OSError:
+                continue
+            if not isinstance(value, str) or not value.strip():
+                continue
+            path = os.path.normpath(os.path.expandvars(value.strip()))
+            if os.path.isfile(os.path.join(path, "steam.exe")):
+                return path
+            if fallback is None and os.path.isdir(path):
+                fallback = path
+        return fallback
 
     def local_vdf_path(self) -> str:
         return os.path.join(os.getenv("LOCALAPPDATA", ""), "Steam", "local.vdf")
@@ -158,13 +185,21 @@ class SteamProcessGateway:
             self.launch(open_cs2=open_cs2)
             return
         # Reap any leftover injectors from previous logins before spawning a new
-        # one — only a single wait-for-steam watcher should ever be running.
+        # one — only a single wait-for-steam watcher should be running. Do not
+        # launch Steam if an old watcher cannot be stopped because it could still
+        # intercept the new process.
         self.kill_injectors()
-        # Injector kills any lingering steam.exe then waits for the next one.
-        # Confirm the watcher process exists before Steam starts; otherwise
-        # steam.exe can win the launch race.
-        logger.info(f"Launching injector (wait-for-steam mode): {injector_path}")
-        subprocess.Popen([injector_path], creationflags=_NO_WINDOW)
-        if not self._wait_until_present(("injector.exe",), 5.0):
-            raise RuntimeError("The HWID injector did not enter its watch loop")
+        try:
+            # Injector kills any lingering steam.exe then waits for the next one.
+            # Confirm the watcher exists before Steam starts so it cannot lose
+            # the launch race.
+            logger.info(f"Launching injector (wait-for-steam mode): {injector_path}")
+            subprocess.Popen([injector_path], creationflags=_NO_WINDOW)
+            if not self._wait_until_present(("injector.exe",), 5.0):
+                raise RuntimeError("The HWID injector did not enter its watch loop")
+        except (OSError, RuntimeError) as exc:
+            logger.error(
+                "HWID injector failed to start; falling back to normal Steam: %s",
+                exc,
+            )
         self.launch(open_cs2=open_cs2)
