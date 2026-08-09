@@ -3,7 +3,7 @@ import os
 
 from warestore.config.settings import STEAMID64_BASE
 from warestore.infrastructure.steam import userdata_gateway
-from warestore.infrastructure.steam.userdata_gateway import UserdataGateway
+from warestore.infrastructure.steam.userdata_gateway import UserdataFolder, UserdataGateway
 
 
 def _id64(id32: int) -> str:
@@ -153,3 +153,34 @@ def test_delete_continues_past_failures(tmp_path):
     assert count == 1  # the real one still got removed
     assert len(errors) == 1
     assert not os.path.exists(os.path.join(steam, "userdata", "111"))
+
+
+def test_delete_refuses_folder_not_returned_by_latest_scan(tmp_path):
+    steam = str(tmp_path / "steam")
+    outside = tmp_path / "important"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep", encoding="utf-8")
+    gw = UserdataGateway()
+    gw.scan(steam, set(), set())
+    forged = UserdataFolder(
+        account_id32="important",
+        path=str(outside),
+        size_bytes=4,
+        token_managed=False,
+        has_cs2_config=False,
+    )
+
+    count, _freed, errors = gw.delete([forged])
+
+    assert count == 0
+    assert errors and "not approved" in errors[0]
+    assert (outside / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_scan_skips_reparse_points(tmp_path, monkeypatch):
+    steam = str(tmp_path)
+    account = _make_account(steam, "111")
+    monkeypatch.setattr(
+        userdata_gateway, "is_reparse_point", lambda path: path == account
+    )
+    assert UserdataGateway().scan(steam, set(), set()) == []

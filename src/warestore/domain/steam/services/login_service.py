@@ -23,6 +23,16 @@ from warestore.domain.steam.services.vdf_patcher import VdfPatcher
 logger = logging.getLogger(__name__)
 
 
+def _is_steam_id64(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 17
+        and value.startswith("76")
+        and value.isascii()
+        and value.isdigit()
+    )
+
+
 class SteamLoginService:
     def __init__(
         self,
@@ -73,7 +83,7 @@ class SteamLoginService:
             data = self._files.read_vdf(path)
             accounts: list[LoginUser] = []
             for steamid, info in data.get("users", {}).items():
-                if len(steamid) == 17 and steamid.startswith("76"):
+                if _is_steam_id64(steamid) and isinstance(info, dict):
                     accounts.append(
                         LoginUser(
                             steam_id=steamid,
@@ -107,7 +117,7 @@ class SteamLoginService:
         return {
             sid
             for sid in data.get("users", {})
-            if len(sid) == 17 and sid.startswith("76")
+            if _is_steam_id64(sid)
         }
 
     def account_names_by_id32(self) -> dict[str, str]:

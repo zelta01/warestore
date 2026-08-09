@@ -130,3 +130,20 @@ def test_apply_source_launch_options_noop_without_source(tmp_path):
     persona.set_cs2_launch_options(str(tmp_path), SRC_SID, "-novid")
     ctrl, _ = _make_controller(tmp_path, "")
     assert ctrl.apply_source_launch_options(DST_SID) is False
+
+
+def test_copy_failure_keeps_existing_target_config(tmp_path, monkeypatch):
+    gateway = Cs2ConfigGateway()
+    _seed_source(tmp_path)
+    target = gateway.config_dir(str(tmp_path), DST_SID)
+    os.makedirs(target, exist_ok=True)
+    existing = os.path.join(target, "existing.cfg")
+    with open(existing, "w", encoding="utf-8") as file:
+        file.write("keep-me")
+
+    def fail_copy(_src, _dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("shutil.copytree", fail_copy)
+    assert gateway.copy_config(str(tmp_path), SRC_SID, DST_SID) is False
+    assert open(existing, encoding="utf-8").read() == "keep-me"

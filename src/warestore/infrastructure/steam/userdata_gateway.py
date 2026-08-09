@@ -20,6 +20,7 @@ import shutil
 from dataclasses import dataclass
 
 from warestore.config.settings import STEAMID64_BASE
+from warestore.infrastructure.persistence.secure_dir import is_reparse_point
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,15 @@ class UserdataFolder:
 
 
 class UserdataGateway:
+    def __init__(self) -> None:
+        # Deletion is only allowed for exact records produced by the latest
+        # successful scan on this gateway instance.
+        self._approved: dict[str, UserdataFolder] = {}
+
+    @staticmethod
+    def _path_key(path: str) -> str:
+        return os.path.normcase(os.path.abspath(path))
+
     def userdata_dir(self, steam_dir: str) -> str:
         return os.path.join(steam_dir, "userdata")
 
@@ -73,6 +83,7 @@ class UserdataGateway:
         display name per folder id when available.
         """
         base = self.userdata_dir(steam_dir)
+        self._approved.clear()
         if not os.path.isdir(base):
             return []
 
@@ -90,7 +101,12 @@ class UserdataGateway:
         for name in entries:
             path = os.path.join(base, name)
             # Steam uses "0" for anonymous/shared data -- never a real account.
-            if not name.isdigit() or name == "0" or not os.path.isdir(path):
+            if (
+                not name.isdigit()
+                or name == "0"
+                or not os.path.isdir(path)
+                or is_reparse_point(path)
+            ):
                 continue
             if name in login32:
                 continue
@@ -107,6 +123,7 @@ class UserdataGateway:
                 )
             )
         found.sort(key=lambda f: f.size_bytes, reverse=True)
+        self._approved = {self._path_key(folder.path): folder for folder in found}
         return found
 
     def delete(self, folders: list[UserdataFolder]) -> tuple[int, int, list[str]]:
@@ -115,7 +132,17 @@ class UserdataGateway:
         freed = 0
         errors: list[str] = []
         for folder in folders:
+            key = self._path_key(folder.path)
+            approved = self._approved.pop(key, None)
+            expected = self._path_key(
+                os.path.join(os.path.dirname(folder.path), folder.account_id32)
+            )
+            if approved != folder or key != expected:
+                errors.append(f"{folder.account_id32}: folder was not approved by the latest scan")
+                continue
             try:
+                if is_reparse_point(folder.path):
+                    raise OSError("folder became a reparse point after scanning")
                 shutil.rmtree(folder.path)
                 deleted += 1
                 freed += folder.size_bytes

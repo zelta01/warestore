@@ -13,9 +13,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from warestore.infrastructure.persistence.download import read_limited
+
 logger = logging.getLogger(__name__)
 
 _ENDPOINT = "https://api.steampowered.com/IPlayerService/GetSteamLevel/v1/"
+_MAX_RESPONSE_BYTES = 256 * 1024
 
 
 class SteamLevelGateway:
@@ -36,9 +39,13 @@ class SteamLevelGateway:
         query = urllib.parse.urlencode({"key": api_key, "steamid": steam_id})
         try:
             with urllib.request.urlopen(f"{_ENDPOINT}?{query}", timeout=self._timeout) as resp:
-                payload = json.loads(resp.read())
+                payload = json.loads(read_limited(resp, _MAX_RESPONSE_BYTES))
         except Exception as exc:
             logger.debug(f"Level fetch failed ({steam_id}): {exc}")
             return None
-        level = payload.get("response", {}).get("player_level")
-        return int(level) if level is not None else None
+        response = payload.get("response", {}) if isinstance(payload, dict) else {}
+        level = response.get("player_level") if isinstance(response, dict) else None
+        try:
+            return int(level) if level is not None else None
+        except (TypeError, ValueError, OverflowError):
+            return None

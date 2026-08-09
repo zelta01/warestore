@@ -74,7 +74,7 @@ QMessageBox QLabel, QInputDialog QLabel {
 /* Standardize dialog button geometry: fixed vertical rhythm, symmetric
    horizontal padding, and a min-width so the button box can't squish them. */
 QMessageBox QPushButton, QInputDialog QPushButton {
-    min-width: 88px;
+    min-width: 108px;
     min-height: 30px;
     padding: 7px 18px;
 }

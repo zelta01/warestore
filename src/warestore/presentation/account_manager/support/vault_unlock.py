@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _MIN_LEN = 8
 _LEGACY_KDF_ITERATIONS = 600_000
+_MAX_KDF_ITERATIONS = 10_000_000
 
 
 # --- settings <-> crypto glue (no Qt) ---
@@ -36,7 +37,7 @@ def _iterations_for(settings: dict, wrap: str) -> int:
     if value in (None, ""):
         return _LEGACY_KDF_ITERATIONS
     iterations = int(value)
-    if iterations < 1:
+    if not 1 <= iterations <= _MAX_KDF_ITERATIONS:
         raise ValueError("invalid vault KDF iteration count")
     return iterations
 

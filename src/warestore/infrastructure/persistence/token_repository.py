@@ -19,6 +19,7 @@ class TokenRepository:
         self._store = SecureJsonStore(
             path or os.path.join(ACCOUNT_MANAGER_DATA_DIR, "tokens.json"), key=key
         )
+        self._key = key
         self._locked = False
 
     def _require_unlocked(self) -> None:
@@ -43,6 +44,7 @@ class TokenRepository:
     def lock(self) -> None:
         """Drop the in-memory DEK and make every read/write fail closed."""
         self._store.set_key(None)
+        self._key = None
         self._locked = True
 
     def unlock(self, key: bytes) -> None:
@@ -50,14 +52,23 @@ class TokenRepository:
         if not key:
             raise ValueError("an unlocked password vault requires a key")
         self._store.set_key(key)
+        self._key = key
         self._locked = False
 
     def rekey(self, new_key: bytes | None) -> None:
         """Re-encrypt the token file from the current key to `new_key`."""
         self._require_unlocked()
         data = self.load_all()
+        old_key = self._key
         self._store.set_key(new_key)
-        self.save_all(data)
+        try:
+            self.save_all(data)
+        except Exception:
+            # Atomic persistence leaves the old file intact when writing fails;
+            # restore its matching key so the live repository remains usable.
+            self._store.set_key(old_key)
+            raise
+        self._key = new_key
 
     def store(self, steam_id: str, username: str, token: str) -> None:
         saved = self.load_all()

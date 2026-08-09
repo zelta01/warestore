@@ -6,6 +6,8 @@ import os
 import re
 from datetime import datetime
 
+from warestore.domain.steam.ports import VdfFilePort
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,7 +123,7 @@ class VdfPatcher:
         entry = f'\n\t\t"{_quote(crc_key)}"\t\t"{_quote(hex_value)}"'
         return text[: brace + 1] + entry + text[brace + 1 :]
 
-    def disable_user_chooser(self, steam_dir: str, files: "VdfFileGateway") -> None:
+    def disable_user_chooser(self, steam_dir: str, files: VdfFilePort) -> None:
         config_path = os.path.join(steam_dir, "config", "config.vdf")
         if not os.path.exists(config_path):
             return

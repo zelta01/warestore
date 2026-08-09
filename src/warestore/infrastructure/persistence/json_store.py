@@ -26,12 +26,16 @@ class JsonStore:
     def read(self, default: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
             with open(self._path, encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
         except FileNotFoundError:
             return dict(default or {})
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning(f"Could not read {self._path}: {exc}")
             return dict(default or {})
+        if not isinstance(data, dict):
+            logger.warning(f"Could not read {self._path}: top-level JSON must be an object")
+            return dict(default or {})
+        return data
 
     def write(self, data: dict[str, Any]) -> None:
         write_text(self._path, json.dumps(data, indent=2))

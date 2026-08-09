@@ -17,6 +17,34 @@ class DownloadTooLargeError(ValueError):
     pass
 
 
+def read_limited(response: BinaryIO, max_bytes: int) -> bytes:
+    """Read an HTTP response into memory without trusting its size headers."""
+    if max_bytes < 1:
+        raise ValueError("max_bytes must be positive")
+    headers = getattr(response, "headers", {})
+    content_length = headers.get("Content-Length")
+    if content_length is not None:
+        try:
+            declared = int(content_length)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid Content-Length header") from exc
+        if declared < 0:
+            raise ValueError("invalid negative Content-Length header")
+        if declared > max_bytes:
+            raise DownloadTooLargeError(
+                f"response exceeds {max_bytes} byte limit: {declared} bytes"
+            )
+    try:
+        data = response.read(max_bytes + 1)
+    except TypeError:
+        # Small test/dummy streams sometimes expose only read(); real HTTP
+        # responses accept a size and therefore retain the hard bound.
+        data = response.read()
+    if len(data) > max_bytes:
+        raise DownloadTooLargeError(f"response exceeds {max_bytes} byte limit")
+    return data
+
+
 def download_limited(
     url: str,
     destination: str,
@@ -26,17 +54,29 @@ def download_limited(
     opener: Callable[..., BinaryIO] | None = None,
 ) -> int:
     """Download to ``destination`` with an explicit timeout and byte ceiling."""
+    if max_bytes < 1:
+        raise ValueError("max_bytes must be positive")
     open_url = opener or urllib.request.urlopen
     response = open_url(url, timeout=timeout)
     try:
         content_length = response.headers.get("Content-Length")
-        if content_length is not None and int(content_length) > max_bytes:
-            raise DownloadTooLargeError(
-                f"download exceeds {max_bytes} byte limit: {content_length} bytes"
-            )
+        if content_length is not None:
+            try:
+                declared = int(content_length)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid Content-Length header") from exc
+            if declared < 0:
+                raise ValueError("invalid negative Content-Length header")
+            if declared > max_bytes:
+                raise DownloadTooLargeError(
+                    f"download exceeds {max_bytes} byte limit: {declared} bytes"
+                )
 
         total = 0
-        with open(destination, "wb") as output:
+        # Exclusive creation refuses pre-planted symlinks/reparse targets. This
+        # matters because the desktop app can run elevated while some caches
+        # live below the user's profile.
+        with open(destination, "xb") as output:
             while True:
                 chunk = response.read(_CHUNK_SIZE)
                 if not chunk:

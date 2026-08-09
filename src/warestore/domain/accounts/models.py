@@ -4,6 +4,17 @@
 from dataclasses import dataclass
 
 
+def _as_int(value: object, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _as_str(value: object, default: str = "") -> str:
+    return value if isinstance(value, str) else default
+
+
 @dataclass
 class AccountRecord:
     eya: str = ""
@@ -30,19 +41,21 @@ class AccountRecord:
             return cls(eya=raw)
         if isinstance(raw, dict):
             return cls(
-                eya=str(raw.get("eya", "")),
-                last_played=int(raw.get("last_played", 0)),
-                cooldown_until=int(raw.get("cooldown_until", 0)),
-                cooldown_duration=int(raw.get("cooldown_duration", 0)),
-                color=str(raw.get("color", "")),
+                eya=_as_str(raw.get("eya", "")),
+                last_played=_as_int(raw.get("last_played", 0), 0),
+                cooldown_until=_as_int(raw.get("cooldown_until", 0), 0),
+                cooldown_duration=_as_int(raw.get("cooldown_duration", 0), 0),
+                color=_as_str(raw.get("color", "")),
                 cs2_seeded=bool(raw.get("cs2_seeded", False)),
-                persona=str(raw.get("persona", "")),
-                avatar_hash=str(raw.get("avatar_hash", "")),
-                premier_rating=int(raw.get("premier_rating", -1)),
-                premier_wins=int(raw.get("premier_wins", -1)),
-                wingman_rank=int(raw.get("wingman_rank", -1)),
-                wingman_wins=int(raw.get("wingman_wins", -1)),
-                cs2_cooldown_expires=int(raw.get("cs2_cooldown_expires", 0)),
+                persona=_as_str(raw.get("persona", "")),
+                avatar_hash=_as_str(raw.get("avatar_hash", "")),
+                premier_rating=_as_int(raw.get("premier_rating", -1), -1),
+                premier_wins=_as_int(raw.get("premier_wins", -1), -1),
+                wingman_rank=_as_int(raw.get("wingman_rank", -1), -1),
+                wingman_wins=_as_int(raw.get("wingman_wins", -1), -1),
+                cs2_cooldown_expires=_as_int(
+                    raw.get("cs2_cooldown_expires", 0), 0
+                ),
             )
         return cls()
 

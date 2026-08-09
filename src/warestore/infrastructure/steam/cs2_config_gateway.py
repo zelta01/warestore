@@ -4,6 +4,7 @@
 import logging
 import os
 import shutil
+import tempfile
 
 from warestore.config.settings import CS2_APP_ID, STEAMID64_BASE
 
@@ -53,18 +54,38 @@ class Cs2ConfigGateway:
             return False
 
         dst = self.config_dir(steam_dir, dst_sid)
+        parent = os.path.dirname(dst)
+        staging = ""
+        backup = ""
         try:
+            os.makedirs(parent, exist_ok=True)
+            # Finish the potentially long copy before moving the live target.
+            # This prevents a disk-full/read error from leaving the account with
+            # no active config directory.
+            staging = tempfile.mkdtemp(prefix=".warestore-730-", dir=parent)
+            os.rmdir(staging)
+            shutil.copytree(src, staging)
+
             if os.path.exists(dst):
                 backup = self._backup_path(dst)
                 os.replace(dst, backup)  # same-filesystem rename of the dir
                 logger.info(f"CS2 config: backed up existing target → {backup}")
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copytree(src, dst)
+            try:
+                os.replace(staging, dst)
+                staging = ""
+            except OSError:
+                if backup and not os.path.exists(dst) and os.path.exists(backup):
+                    os.replace(backup, dst)
+                    backup = ""
+                raise
             logger.info(f"CS2 config: copied {src} → {dst}")
             return True
         except OSError as exc:
             logger.warning(f"CS2 config copy failed: {exc}")
             return False
+        finally:
+            if staging and os.path.exists(staging):
+                shutil.rmtree(staging, ignore_errors=True)
 
     @staticmethod
     def _backup_path(dst: str) -> str:

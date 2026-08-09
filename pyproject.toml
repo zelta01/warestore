@@ -5,14 +5,19 @@ description = "Steam cache login and account management tool"
 requires-python = ">=3.12"
 dependencies = [
     "chardet>=5.0",
-    "cryptography>=42.0",
-    "pillow>=9.0",
+    "cryptography>=50.0",
+    "gevent>=26.0",
+    "gevent-eventemitter>=2.1",
+    "pillow>=12.3.0",
+    "protobuf>=6.33.5,<7",
     "psutil>=5.9",
     "pyjwt>=2.8",
     "pyqt5>=5.15,<6",
     "pywin32>=305",
     "requests>=2.28,<3",
-    "steam[client]>=1.4.4",
+    # ValvePython's unmaintained `client` extra incorrectly pins protobuf <4.
+    # Declare those client dependencies directly so patched protobuf can be used.
+    "steam>=1.4.4",
     "vdf>=3.4",
 ]
 

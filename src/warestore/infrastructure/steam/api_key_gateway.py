@@ -8,11 +8,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from warestore.infrastructure.persistence.download import read_limited
+
 logger = logging.getLogger(__name__)
 
 # GetSupportedAPIList needs no steamid and returns 200 for a valid key, 403 for
 # a bad one — a clean, cheap key check.
 _ENDPOINT = "https://api.steampowered.com/ISteamWebAPIUtil/GetSupportedAPIList/v1/"
+_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
 class SteamApiKeyGateway:
@@ -27,7 +30,7 @@ class SteamApiKeyGateway:
         query = urllib.parse.urlencode({"key": key})
         try:
             with urllib.request.urlopen(f"{_ENDPOINT}?{query}", timeout=self._timeout) as resp:
-                resp.read()
+                read_limited(resp, _MAX_RESPONSE_BYTES)
             return "valid"
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):

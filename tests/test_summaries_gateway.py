@@ -98,3 +98,24 @@ def test_levels_parse_and_skip(monkeypatch):
 
 def test_levels_no_key_skips_network():
     assert SteamLevelGateway().fetch_levels("", ["1"]) == {}
+
+
+def test_summaries_malformed_fields_fail_soft(monkeypatch):
+    payload = {
+        "response": {
+            "players": [None, {"steamid": "1", "personastate": "invalid"}]
+        }
+    }
+    monkeypatch.setattr(
+        sum_module.urllib.request, "urlopen", lambda url, timeout=0: _FakeResp(payload)
+    )
+    assert SteamSummariesGateway().fetch_statuses("key", ["1"])["1"]["state"] == 0
+
+
+def test_levels_malformed_level_is_ignored(monkeypatch):
+    monkeypatch.setattr(
+        level_module.urllib.request,
+        "urlopen",
+        lambda url, timeout=0: _FakeResp({"response": {"player_level": "bad"}}),
+    )
+    assert SteamLevelGateway().fetch_levels("key", ["1"]) == {}

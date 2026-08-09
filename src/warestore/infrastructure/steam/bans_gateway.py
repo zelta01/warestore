@@ -9,10 +9,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from warestore.infrastructure.persistence.download import read_limited
+
 logger = logging.getLogger(__name__)
 
 _ENDPOINT = "https://api.steampowered.com/ISteamUser/GetPlayerBans/v1/"
 _BATCH = 100  # GetPlayerBans accepts up to 100 steamids per call
+_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 class SteamBansGateway:
@@ -37,7 +47,7 @@ class SteamBansGateway:
         query = urllib.parse.urlencode({"key": api_key, "steamids": ",".join(chunk)})
         try:
             with urllib.request.urlopen(f"{_ENDPOINT}?{query}", timeout=self._timeout) as resp:
-                payload = json.loads(resp.read())
+                payload = json.loads(read_limited(resp, _MAX_RESPONSE_BYTES))
         except urllib.error.HTTPError as exc:
             # 401/403 → bad/forbidden key; log once per call, return empty.
             logger.warning(f"Ban fetch HTTP {exc.code} (check Steam API key)")
@@ -47,16 +57,19 @@ class SteamBansGateway:
             return {}
 
         out: dict[str, dict] = {}
-        for entry in payload.get("players", []):
+        players = payload.get("players", []) if isinstance(payload, dict) else []
+        for entry in players if isinstance(players, list) else []:
+            if not isinstance(entry, dict):
+                continue
             sid = entry.get("SteamId", "")
             if not sid:
                 continue
             out[sid] = {
                 "vac": bool(entry.get("VACBanned", False)),
-                "vac_count": int(entry.get("NumberOfVACBans", 0)),
-                "game_bans": int(entry.get("NumberOfGameBans", 0)),
+                "vac_count": _as_int(entry.get("NumberOfVACBans", 0)),
+                "game_bans": _as_int(entry.get("NumberOfGameBans", 0)),
                 "community": bool(entry.get("CommunityBanned", False)),
                 "trade": str(entry.get("EconomyBan", "none")),
-                "days_since": int(entry.get("DaysSinceLastBan", 0)),
+                "days_since": _as_int(entry.get("DaysSinceLastBan", 0)),
             }
         return out

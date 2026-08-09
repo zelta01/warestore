@@ -56,3 +56,23 @@ def test_network_error_returns_empty(monkeypatch):
 
     monkeypatch.setattr(bans_module.urllib.request, "urlopen", boom)
     assert SteamBansGateway().fetch_bans("key", ["1"]) == {}
+
+
+def test_malformed_player_fields_fail_soft(monkeypatch):
+    payload = {
+        "players": [
+            None,
+            {
+                "SteamId": "1",
+                "NumberOfVACBans": "bad",
+                "NumberOfGameBans": None,
+                "DaysSinceLastBan": [],
+            },
+        ]
+    }
+    monkeypatch.setattr(
+        bans_module.urllib.request, "urlopen", lambda url, timeout=0: _FakeResp(payload)
+    )
+    out = SteamBansGateway().fetch_bans("key", ["1"])
+    assert out["1"]["vac_count"] == 0
+    assert out["1"]["game_bans"] == 0

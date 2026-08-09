@@ -4,6 +4,10 @@
 import ctypes
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PyQt5.QtGui import QIcon
 
 
 def _qss_dir() -> Path:

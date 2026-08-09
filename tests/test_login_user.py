@@ -41,3 +41,27 @@ def test_parse_loginusers_returns_all_250_accounts(tmp_path):
     assert len(accounts) == 250
     assert accounts[0].timestamp == 249
     assert accounts[-1].timestamp == 0
+
+
+def test_parse_loginusers_rejects_non_numeric_ids_and_non_object_entries(tmp_path):
+    class Files:
+        def read_vdf(self, _path):
+            return {
+                "users": {
+                    "76not-a-steamid!": {"AccountName": "bad"},
+                    "76561198000000001": "not-an-object",
+                    "76561198000000002": {
+                        "AccountName": "good",
+                        "Timestamp": "1",
+                    },
+                }
+            }
+
+    path = tmp_path / "loginusers.vdf"
+    path.touch()
+    service = object.__new__(SteamLoginService)
+    service._files = Files()
+
+    assert [account.steam_id for account in service.parse_loginusers(str(path))] == [
+        "76561198000000002"
+    ]

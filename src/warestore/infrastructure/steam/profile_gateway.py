@@ -9,7 +9,10 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 
+from warestore.infrastructure.persistence.download import read_limited
+
 logger = logging.getLogger(__name__)
+_MAX_PROFILE_BYTES = 512 * 1024
 
 
 class SteamProfileGateway:
@@ -45,7 +48,7 @@ class SteamProfileGateway:
                 },
             )
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                tree = ET.fromstring(resp.read())
+                tree = ET.fromstring(read_limited(resp, _MAX_PROFILE_BYTES))
 
             # Persona name + avatar are public even on private profiles. The
             # avatarhash is the URL's filename stem (…/<hash>_full.jpg).

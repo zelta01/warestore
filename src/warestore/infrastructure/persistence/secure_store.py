@@ -95,7 +95,10 @@ class SecureJsonStore:
                 logger.error(f"{os.path.basename(self._path)} is password-protected but locked.")
                 return _unavailable("password-protected but locked")
             try:
-                return json.loads(vault_crypto.decrypt(self._key, blob).decode("utf-8"))
+                data = json.loads(vault_crypto.decrypt(self._key, blob).decode("utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("top-level JSON must be an object")
+                return data
             except Exception as exc:
                 logger.error(f"Vault decrypt failed for {self._path}: {exc}")
                 return _unavailable(f"decrypt failed: {exc}")
@@ -103,6 +106,8 @@ class SecureJsonStore:
         # Legacy plaintext JSON → migrate into the active mode.
         try:
             data = json.loads(blob.decode("utf-8"))
+            if not isinstance(data, dict):
+                return _unavailable("top-level JSON must be an object")
             logger.info(f"Migrating plaintext {os.path.basename(self._path)} to encrypted vault.")
             self.write(data)
             return data
@@ -112,6 +117,8 @@ class SecureJsonStore:
         # DPAPI blob.
         try:
             data = json.loads(_unprotect(blob).decode("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("top-level JSON must be an object")
         except Exception as exc:
             logger.error(f"Vault decrypt failed for {self._path}: {exc}")
             return _unavailable(f"decrypt failed: {exc}")

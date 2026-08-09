@@ -14,10 +14,20 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 
+from warestore.infrastructure.persistence.download import read_limited
+
 logger = logging.getLogger(__name__)
 
 _ENDPOINT = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/"
 _BATCH = 100
+_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 class SteamSummariesGateway:
@@ -45,7 +55,7 @@ class SteamSummariesGateway:
         query = urllib.parse.urlencode({"key": api_key, "steamids": ",".join(chunk)})
         try:
             with urllib.request.urlopen(f"{_ENDPOINT}?{query}", timeout=self._timeout) as resp:
-                payload = json.loads(resp.read())
+                payload = json.loads(read_limited(resp, _MAX_RESPONSE_BYTES))
         except urllib.error.HTTPError as exc:
             logger.warning(f"Summaries HTTP {exc.code} (check Steam API key)")
             return {sid: {"state": -1, "game": "", "stale": True} for sid in chunk}
@@ -53,8 +63,12 @@ class SteamSummariesGateway:
             logger.warning(f"Summaries fetch failed: {exc}")
             return {sid: {"state": -1, "game": "", "stale": True} for sid in chunk}
 
+        response = payload.get("response", {}) if isinstance(payload, dict) else {}
+        players = response.get("players", []) if isinstance(response, dict) else []
         out: dict[str, dict] = {}
-        for player in payload.get("response", {}).get("players", []):
+        for player in players if isinstance(players, list) else []:
+            if not isinstance(player, dict):
+                continue
             sid = player.get("steamid", "")
             if not sid:
                 continue
@@ -65,8 +79,8 @@ class SteamSummariesGateway:
                 # personastate: 0 offline,1 online,2 busy,3 away,4 snooze,
                 # 5 looking-to-trade,6 looking-to-play. Cards color 0-4; map 5/6
                 # to online.
-                persona = int(player.get("personastate", 0))
-                state = persona if persona <= 4 else 1
+                persona = _as_int(player.get("personastate", 0))
+                state = persona if 0 <= persona <= 4 else 1
             out[sid] = {
                 "state": state,
                 "game": game,

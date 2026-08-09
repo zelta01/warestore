@@ -19,6 +19,18 @@ def test_decode_steam_id():
     assert SERVICE.decode_steam_id(token) == STEAM_ID
 
 
+def test_decode_steam_id_rejects_untrusted_subject_shapes():
+    assert SERVICE.decode_steam_id(_fake_jwt({"sub": 76561198000000001})) is None
+    assert SERVICE.decode_steam_id(_fake_jwt({"sub": "../userdata"})) is None
+    assert SERVICE.decode_steam_id(_fake_jwt({"sub": "123"})) is None
+
+
+def test_rejects_unreasonably_large_tokens():
+    token = "ey" + ("A" * 20_000) + ".body.sig"
+    assert SERVICE.is_valid_format(token) is False
+    assert SERVICE.verify_expiry(token) == -1
+
+
 def test_verify_steam_jwt_valid():
     token = _fake_jwt(
         {"iss": "steam", "aud": "client", "exp": int(time.time()) + 3600}

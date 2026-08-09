@@ -100,3 +100,13 @@ def test_password_upgrade_preserves_old_recovery_iteration_count(monkeypatch):
     assert vault_unlock.unlock_password(settings, "password") == dek
     assert settings["vault_rc_kdf_iterations"] == 1000
     assert vault_unlock.unlock_recovery(settings, code) == dek
+
+
+def test_rejects_unbounded_kdf_iteration_metadata():
+    settings = {
+        "vault_pw_kdf_iterations": 10_000_001,
+        "vault_pw_salt": "00" * 16,
+        "vault_pw_wrap": "00",
+    }
+    with pytest.raises(ValueError, match="invalid vault KDF"):
+        vault_unlock.unlock_password(settings, "password")

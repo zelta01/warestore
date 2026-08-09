@@ -332,13 +332,35 @@ class SettingsCoordinator:
         password = prompt_new_password()
         if password is None:
             return
+        previous_settings = dict(self._settings)
         dek = vault_crypto.new_dek()
         code = vault_crypto.generate_recovery_code()
-        self._ctrl.rekey_vault(dek)  # re-encrypt tokens with the new DEK
         vault_unlock.set_password(self._settings, dek, password)
         vault_unlock.set_recovery(self._settings, dek, code)
         self._settings["vault_mode"] = "password"
-        self._ctrl.save_settings(self._settings)
+        # Persist both ways to recover the DEK before encrypting tokens with it.
+        # If settings persistence fails, the existing DPAPI vault is untouched.
+        settings_persisted = False
+        try:
+            self._ctrl.save_settings(self._settings)
+            settings_persisted = True
+            self._ctrl.rekey_vault(dek)  # encrypt with the persisted DEK
+        except Exception as exc:
+            self._settings.clear()
+            self._settings.update(previous_settings)
+            if settings_persisted:
+                try:
+                    self._ctrl.save_settings(self._settings)
+                except Exception:
+                    logger.exception("Could not roll back vault settings")
+            logger.exception("Could not enable the master-password vault")
+            QMessageBox.warning(
+                self._parent,
+                "Vault unchanged",
+                f"The master password could not be enabled. Your existing vault "
+                f"was kept unchanged.\n\n{exc}",
+            )
+            return
         self._set_vault_lock_minutes(
             int(self._settings.get("vault_lock_minutes", 0) or 0)
         )

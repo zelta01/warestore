@@ -2,6 +2,7 @@
 # Copyright (C) 2026 bet3rd
 
 import base64
+import binascii
 import enum
 import json
 import logging
@@ -12,6 +13,7 @@ import jwt
 logger = logging.getLogger(__name__)
 
 TOKEN_EXPIRY_GRACE_SECONDS = 3 * 60 * 60
+MAX_REFRESH_TOKEN_CHARS = 16 * 1024
 
 
 class TokenVerdict(enum.Enum):
@@ -35,19 +37,33 @@ class SteamJwtService:
     @staticmethod
     def is_valid_format(token: str) -> bool:
         """True when `token` is structurally a JWT (three dot-separated parts)."""
-        return bool(token) and token.count(".") == 2
+        return (
+            isinstance(token, str)
+            and 0 < len(token) <= MAX_REFRESH_TOKEN_CHARS
+            and token.count(".") == 2
+        )
 
     @staticmethod
     def looks_like_jwt(token: str) -> bool:
         """Heuristic for a Steam refresh-token JWT (base64 payload starts 'ey')."""
-        return bool(token) and token.lower().startswith("ey") and token.count(".") == 2
+        return SteamJwtService.is_valid_format(token) and token.lower().startswith("ey")
 
     def decode_steam_id(self, token: str) -> str | None:
         payload = self._parse_payload(token)
         if not payload:
             return None
         try:
-            return json.loads(payload).get("sub")
+            decoded = json.loads(payload)
+            steam_id = decoded.get("sub") if isinstance(decoded, dict) else None
+            if (
+                isinstance(steam_id, str)
+                and len(steam_id) == 17
+                and steam_id.startswith("76")
+                and steam_id.isascii()
+                and steam_id.isdigit()
+            ):
+                return steam_id
+            return None
         except json.JSONDecodeError:
             return None
 
@@ -57,8 +73,9 @@ class SteamJwtService:
         if not payload:
             return 0
         try:
-            return int(json.loads(payload).get("iat", 0) or 0)
-        except (json.JSONDecodeError, TypeError, ValueError):
+            decoded = json.loads(payload)
+            return int(decoded.get("iat", 0) or 0) if isinstance(decoded, dict) else 0
+        except (json.JSONDecodeError, TypeError, ValueError, OverflowError):
             return 0
 
     def classify(self, refresh_token: str) -> tuple[TokenVerdict, int]:
@@ -69,6 +86,8 @@ class SteamJwtService:
         parses but has unexpected claims is deliberately *unrecognised*, not
         expired.  The CM logon remains the authority for those tokens.
         """
+        if not self.is_valid_format(refresh_token):
+            return TokenVerdict.MALFORMED, -1
         try:
             decoded = jwt.decode(
                 refresh_token,
@@ -110,6 +129,8 @@ class SteamJwtService:
 
     @staticmethod
     def _parse_payload(token: str) -> str | None:
+        if not SteamJwtService.is_valid_format(token):
+            return None
         parts = token.split(".")
         if len(parts) != 3:
             return None
@@ -118,6 +139,6 @@ class SteamJwtService:
         if padding:
             payload += "=" * (4 - padding)
         try:
-            return base64.b64decode(payload).decode("utf-8")
-        except Exception:
+            return base64.urlsafe_b64decode(payload).decode("utf-8")
+        except (ValueError, UnicodeDecodeError, binascii.Error):
             return None

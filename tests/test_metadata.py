@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import json
 
 from warestore.domain.accounts.activity import format_last_played
 from warestore.infrastructure.persistence.metadata_repository import AccountMetadataRepository
@@ -94,3 +95,20 @@ def test_cs2_rank_defaults_when_absent(tmp_path):
     rec = repo.get("1")
     assert rec.premier_rating == -1 and rec.wingman_rank == -1 and rec.cs2_cooldown_expires == 0
     assert rec.premier_wins == -1 and rec.wingman_wins == -1
+
+
+def test_corrupt_field_types_fall_back_without_crashing(tmp_path):
+    path = tmp_path / "meta.json"
+    path.write_text(
+        json.dumps({"1": {"last_played": "not-a-number", "premier_rating": None}}),
+        encoding="utf-8",
+    )
+    rec = AccountMetadataRepository(path=str(path)).get("1")
+    assert rec.last_played == 0
+    assert rec.premier_rating == -1
+
+
+def test_non_object_metadata_document_is_treated_as_empty(tmp_path):
+    path = tmp_path / "meta.json"
+    path.write_text("[]", encoding="utf-8")
+    assert AccountMetadataRepository(path=str(path)).all() == {}

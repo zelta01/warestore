@@ -50,6 +50,15 @@ def test_empty_file_returns_default(tmp_path):
     assert SecureJsonStore(str(path)).read() == {}
 
 
+def test_plaintext_non_object_fails_closed(tmp_path):
+    path = tmp_path / "tokens.json"
+    path.write_text("[]", encoding="utf-8")
+    store = SecureJsonStore(str(path))
+    assert store.read() == {}
+    with pytest.raises(SecureStoreUnavailable, match="top-level JSON"):
+        store.read(strict=True)
+
+
 # --- master-password (AES) mode ---
 
 
@@ -101,4 +110,20 @@ def test_explicitly_locked_repo_raises_instead_of_looking_empty(tmp_path):
         repo.save_all({})
 
     repo.unlock(_KEY)
+    assert repo.load_all()["s"]["token"] == "eyA.b.c"
+
+
+def test_repo_rekey_write_failure_restores_old_key(tmp_path, monkeypatch):
+    path = tmp_path / "tok.json"
+    repo = TokenRepository(path=str(path), key=_KEY)
+    repo.store("s", "u", "eyA.b.c")
+    real_write = repo._store.write
+
+    def fail_once(_data):
+        monkeypatch.setattr(repo._store, "write", real_write)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(repo._store, "write", fail_once)
+    with pytest.raises(OSError, match="disk full"):
+        repo.rekey(_KEY2)
     assert repo.load_all()["s"]["token"] == "eyA.b.c"

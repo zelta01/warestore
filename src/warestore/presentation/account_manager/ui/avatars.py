@@ -3,7 +3,10 @@
 
 import io
 import os
+import re
 import urllib.request
+import warnings
+from urllib.parse import urlparse
 
 from PyQt5.QtCore import Qt, QRect
 from PyQt5.QtGui import QBrush, QColor, QPainter, QPainterPath, QPixmap
@@ -36,6 +39,8 @@ except ImportError:
 
 AVATAR_SIZE = 54
 _MAX_AVATAR_BYTES = 5 * 1024 * 1024
+_MAX_AVATAR_PIXELS = 16 * 1024 * 1024
+_AVATAR_HASH_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 # Fresh avatars fetched via the Steam Web API are cached here, keyed by Steam's
 # avatarhash, so an unchanged picture is only ever downloaded once.
@@ -89,9 +94,14 @@ def circular_avatar_from_file(path: str, dpr: float | None = None) -> QPixmap | 
     phys = max(1, round(AVATAR_SIZE * dpr))
     try:
         if PIL_AVAILABLE:
-            img = PILImage.open(path).convert("RGBA").resize(
-                (phys, phys), PILImage.LANCZOS
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", PILImage.DecompressionBombWarning)
+                with PILImage.open(path) as source:
+                    if source.width * source.height > _MAX_AVATAR_PIXELS:
+                        return None
+                    img = source.convert("RGBA").resize(
+                        (phys, phys), PILImage.LANCZOS
+                    )
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             buf.seek(0)
@@ -123,7 +133,20 @@ def load_avatar_pixmap(steam_dir: str, steamid64: str, dpr: float | None = None)
 
 
 def cached_avatar_path(avatar_hash: str) -> str:
+    if not isinstance(avatar_hash, str) or not _AVATAR_HASH_RE.fullmatch(avatar_hash):
+        raise ValueError("invalid Steam avatar hash")
     return os.path.join(_AVATAR_CACHE_DIR, f"{avatar_hash}.jpg")
+
+
+def _allowed_avatar_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").casefold()
+    except ValueError:
+        return False
+    return parsed.scheme.casefold() == "https" and (
+        host == "steamstatic.com" or host.endswith(".steamstatic.com")
+    )
 
 
 def avatar_for(
@@ -136,8 +159,11 @@ def avatar_for(
     """
     dpr = _dpr() if dpr is None else dpr
     if avatar_hash:
-        path = cached_avatar_path(avatar_hash)
-        if os.path.exists(path):
+        try:
+            path = cached_avatar_path(avatar_hash)
+        except ValueError:
+            path = ""
+        if path and os.path.exists(path):
             pix = circular_avatar_from_file(path, dpr)
             if pix is not None:
                 return pix
@@ -151,9 +177,12 @@ def ensure_avatar_downloaded(url: str, avatar_hash: str, timeout: int = 10) -> s
     the cached file path, or None on failure / missing inputs. Because the file
     is keyed by avatarhash, an unchanged avatar is fetched only once.
     """
-    if not url or not avatar_hash:
+    if not url or not avatar_hash or not _allowed_avatar_url(url):
         return None
-    path = cached_avatar_path(avatar_hash)
+    try:
+        path = cached_avatar_path(avatar_hash)
+    except ValueError:
+        return None
     if os.path.exists(path):
         return path
     tmp = path + ".part"
