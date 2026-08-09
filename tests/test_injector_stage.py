@@ -152,6 +152,26 @@ def test_spoofer_watch_failure_falls_back_to_plain_launch(monkeypatch, tmp_path)
     assert launched == [True]
 
 
+def test_injector_startup_kill_triggers_second_steam_launch(monkeypatch, tmp_path):
+    injector = tmp_path / "injector.exe"
+    injector.write_bytes(b"verified elsewhere")
+    gateway = process_gateway.SteamProcessGateway()
+    launches: list[bool] = []
+    injector_kills = []
+
+    monkeypatch.setattr(injector_stage, "verify_injector", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gateway, "kill_injectors", lambda: injector_kills.append(True))
+    monkeypatch.setattr(gateway, "_wait_until_present", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gateway, "_wait_until_stable", lambda *args, **kwargs: False)
+    monkeypatch.setattr(gateway, "launch", lambda *, open_cs2=False: launches.append(open_cs2))
+    monkeypatch.setattr(process_gateway.subprocess, "Popen", lambda *args, **kwargs: None)
+
+    gateway.launch_with_spoofer(str(injector), open_cs2=True)
+
+    assert launches == [True, True]
+    assert injector_kills == [True]
+
+
 def test_untrusted_hardware_pool_falls_back_to_plain_launch(tmp_path):
     class Controller:
         def __init__(self):

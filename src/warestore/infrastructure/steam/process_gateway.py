@@ -62,6 +62,30 @@ class SteamProcessGateway:
                 return False
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
+    @classmethod
+    def _wait_until_stable(
+        cls,
+        names: tuple[str, ...],
+        *,
+        stable_for: float,
+        timeout: float,
+    ) -> bool:
+        """Return once a process has stayed present for the requested period."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        present_since: float | None = None
+        while True:
+            now = time.monotonic()
+            if cls._named_processes(names):
+                if present_since is None:
+                    present_since = now
+                if now - present_since >= max(0.0, stable_for):
+                    return True
+            else:
+                present_since = None
+            if now >= deadline:
+                return False
+            time.sleep(min(0.1, max(0.0, deadline - now)))
+
     @staticmethod
     def _force_kill(processes: list[psutil.Process]) -> None:
         for process in processes:
@@ -202,4 +226,24 @@ class SteamProcessGateway:
                 "HWID injector failed to start; falling back to normal Steam: %s",
                 exc,
             )
+            self.launch(open_cs2=open_cs2)
+            return
+
         self.launch(open_cs2=open_cs2)
+        # Process existence does not mean the injector is ready: immediately
+        # after startup it loads the account profile and calls taskkill on
+        # steam.exe before entering its wait loop. If our first Steam process is
+        # consumed by that startup kill, the injector is then genuinely waiting
+        # and a second launch is the process it will inject into.
+        if self._wait_until_stable(
+            ("steam.exe",), stable_for=1.0, timeout=5.0
+        ):
+            return
+
+        logger.info(
+            "Injector consumed the initial Steam start while initializing; "
+            "launching Steam again now that the injector is waiting."
+        )
+        self.launch(open_cs2=open_cs2)
+        if not self._wait_until_present(("steam.exe",), 15.0):
+            raise RuntimeError("Steam did not start for the HWID injector")
